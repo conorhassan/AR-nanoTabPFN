@@ -1,0 +1,50 @@
+device: cpu
+
+data:
+  batch_size: 512
+  num_batches_per_epoch: 2000
+  num_workers: 0
+  d_list: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+  nc_list: [8, 16, 32, 64, 128, 256, 512, 1024]
+  num_buffer: 32
+  num_target: 512
+  normalize_y: true
+  dtype: float32
+  seed: 123
+
+model:
+  d_model: 64
+  n_heads: 4
+  n_layers: 12
+  d_ff: 128
+  num_features: 10
+  buffer_size: 32
+  num_components: 20
+
+optimizer:
+  lr: 1.0e-4
+  betas: [0.9, 0.95]
+  weight_decay: 0.0
+
+scheduler:
+  use_scheduler: true
+  warmup_steps: 2000
+  total_steps: 20000
+
+training:
+  max_steps: 20000
+  grad_clip: 0.5
+  compile_model: true
+  use_amp: true
+  amp_dtype: bfloat16
+  log_interval: 50
+  val_interval: 250
+
+checkpoint:
+  save_dir: checkpoints/artabpfn
+  save_interval: 1000
+
+logging:
+  use_wandb: false
+  project: artabpfn
+  run_name: null

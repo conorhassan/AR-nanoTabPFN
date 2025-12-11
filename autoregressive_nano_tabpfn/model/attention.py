@@ -31,7 +31,7 @@ class MultiheadAttention(nn.Module):
         super().__init__()
         self.n_heads = n_heads
         self.head_dim = d_model // n_heads
-        self.scale = self.head_dim ** -0.5
+        self.scale = self.head_dim**-0.5
 
         self.q_proj = nn.Linear(d_model, d_model, bias=False)
         self.k_proj = nn.Linear(d_model, d_model, bias=False)
@@ -39,11 +39,7 @@ class MultiheadAttention(nn.Module):
         self.out_proj = nn.Linear(d_model, d_model, bias=False)
 
     def forward(
-        self,
-        q: Tensor,
-        k: Tensor,
-        v: Tensor,
-        block_mask: BlockMask
+        self, q: Tensor, k: Tensor, v: Tensor, block_mask: BlockMask
     ) -> Tuple[Tensor, Tuple[Tensor, Tensor]]:
         B, Sq, D = q.shape
         _, Skv, _ = k.shape
@@ -65,12 +61,14 @@ class MultiheadAttention(nn.Module):
 _mask_cache = {}
 
 
-def create_dense_mask(seq_len: int, device: str = 'cuda') -> BlockMask:
+def create_dense_mask(seq_len: int, device: str = "cuda") -> BlockMask:
     """Dense self-attention mask for feature dimension (all attend to all)."""
-    key = ('dense', seq_len, device)
+    key = ("dense", seq_len, device)
     if key not in _mask_cache:
+
         def mask_mod(b, h, q_idx, kv_idx):
             return q_idx >= 0  # Always true
+
         _mask_cache[key] = create_block_mask(
             mask_mod, B=None, H=None, Q_LEN=seq_len, KV_LEN=seq_len, device=device
         )
@@ -82,7 +80,7 @@ def create_row_mask(
     context_len: int,
     buffer_len: int,
     attending_chunks: int | None = None,
-    device: str = 'cuda'
+    device: str = "cuda",
 ) -> BlockMask:
     """
     Row attention mask with Context/Buffer/Target sections.
@@ -104,7 +102,7 @@ def create_row_mask(
     if attending_chunks is None:
         attending_chunks = target_len // (2 * buffer_len)
 
-    key = ('row', num_rows, context_len, buffer_len, attending_chunks, device)
+    key = ("row", num_rows, context_len, buffer_len, attending_chunks, device)
     if key not in _mask_cache:
         target_start = context_len + buffer_len
 
@@ -162,15 +160,14 @@ def create_row_mask(
     return _mask_cache[key]
 
 
-def create_context_self_attention_mask(
-    context_len: int,
-    device: str = 'cuda'
-) -> BlockMask:
+def create_context_self_attention_mask(context_len: int, device: str = "cuda") -> BlockMask:
     """Dense self-attention mask for context encoding (used in inference)."""
-    key = ('context_self', context_len, device)
+    key = ("context_self", context_len, device)
     if key not in _mask_cache:
+
         def mask_mod(b, h, q_idx, kv_idx):
             return q_idx >= 0  # Always true (dense)
+
         _mask_cache[key] = create_block_mask(
             mask_mod, B=None, H=None, Q_LEN=context_len, KV_LEN=context_len, device=device
         )

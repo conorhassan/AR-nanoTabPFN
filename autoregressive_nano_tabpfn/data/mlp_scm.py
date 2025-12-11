@@ -200,9 +200,9 @@ class MLPSCM(nn.Module):
         out_dim = self.num_outputs if is_output else self.hidden_dim
 
         if self.pre_sample_noise_std:
-            noise_std = torch.abs(
-                torch.randn(1, out_dim, device=self.device) * self.noise_std
-            ) + 1e-6
+            noise_std = (
+                torch.abs(torch.randn(1, out_dim, device=self.device) * self.noise_std) + 1e-6
+            )
         else:
             noise_std = self.noise_std
 
@@ -289,9 +289,7 @@ class MLPSCM(nn.Module):
             # Contiguous block sampling
             max_start = total_dim - self.num_outputs - self.num_features
             start = random.randint(0, max(0, max_start))
-            perm = start + torch.arange(
-                self.num_outputs + self.num_features, device=self.device
-            )
+            perm = start + torch.arange(self.num_outputs + self.num_features, device=self.device)
         else:
             # Random sampling
             perm = torch.randperm(total_dim - 1, device=self.device)

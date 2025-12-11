@@ -17,7 +17,7 @@ from torch import Tensor, nn
 import torch.nn.functional as F
 from torch.nn.attention.flex_attention import BlockMask
 
-from .attention import MultiheadAttention, create_dense_mask, create_row_mask
+from .attention import MultiheadAttention
 
 
 class Embedder(nn.Module):
@@ -38,8 +38,9 @@ class Embedder(nn.Module):
         self._marker_lookup = {"target": 0, "context": 1, "buffer": 2}
 
     def _get_marker(self, batch_size: int, marker_type: str, device: torch.device) -> Tensor:
-        idx = torch.full((batch_size, 1), self._marker_lookup[marker_type],
-                        dtype=torch.long, device=device)
+        idx = torch.full(
+            (batch_size, 1), self._marker_lookup[marker_type], dtype=torch.long, device=device
+        )
         return self.marker_embed(idx)
 
     def embed_context(self, x: Tensor, y: Tensor) -> Tensor:
@@ -83,21 +84,14 @@ class TwoStageTransformerLayer(nn.Module):
         self.attn_features = MultiheadAttention(d_model, n_heads)
         self.attn_rows = MultiheadAttention(d_model, n_heads)
 
-        self.ff = nn.Sequential(
-            nn.Linear(d_model, d_ff),
-            nn.GELU(),
-            nn.Linear(d_ff, d_model)
-        )
+        self.ff = nn.Sequential(nn.Linear(d_model, d_ff), nn.GELU(), nn.Linear(d_ff, d_model))
 
         self.norm1 = nn.LayerNorm(d_model)
         self.norm2 = nn.LayerNorm(d_model)
         self.norm3 = nn.LayerNorm(d_model)
 
     def forward(
-        self,
-        x: Tensor,
-        mask_features: BlockMask,
-        mask_rows: BlockMask
+        self, x: Tensor, mask_features: BlockMask, mask_rows: BlockMask
     ) -> Tuple[Tensor, Tuple[Tensor, Tensor]]:
         """
         Args:
@@ -131,16 +125,13 @@ class TwoStageTransformer(nn.Module):
     def __init__(self, d_model: int, n_heads: int, n_layers: int, d_ff: int):
         super().__init__()
         self.d_model = d_model
-        self.layers = nn.ModuleList([
-            TwoStageTransformerLayer(d_model, n_heads, d_ff) for _ in range(n_layers)
-        ])
+        self.layers = nn.ModuleList(
+            [TwoStageTransformerLayer(d_model, n_heads, d_ff) for _ in range(n_layers)]
+        )
         self.norm = nn.LayerNorm(d_model)
 
     def forward(
-        self,
-        x: Tensor,
-        mask_features: BlockMask,
-        mask_rows: BlockMask
+        self, x: Tensor, mask_features: BlockMask, mask_rows: BlockMask
     ) -> Tuple[Tensor, List[Tuple[Tensor, Tensor]]]:
         kv_cache = []
         for layer in self.layers:
@@ -172,9 +163,7 @@ class MixtureGaussianHead(nn.Module):
 
         # Head outputs: mean, std, weight for each component
         self.head = nn.Sequential(
-            nn.Linear(d_model, d_ff),
-            nn.GELU(),
-            nn.Linear(d_ff, num_components * dim_y * 3)
+            nn.Linear(d_model, d_ff), nn.GELU(), nn.Linear(d_ff, num_components * dim_y * 3)
         )
 
         # Mixture initialization
@@ -231,9 +220,7 @@ class MixtureGaussianHead(nn.Module):
 
         return loss, mean, std, weight
 
-    def _log_likelihood(
-        self, y: Tensor, mean: Tensor, std: Tensor, weight: Tensor
-    ) -> Tensor:
+    def _log_likelihood(self, y: Tensor, mean: Tensor, std: Tensor, weight: Tensor) -> Tensor:
         """Compute log-likelihood under mixture."""
         y = y.unsqueeze(2)  # [B, T, 1, D] for broadcasting with [B, T, K, D]
         log_prob = -0.5 * (math.log(2 * math.pi) + 2 * std.log() + ((y - mean) / std) ** 2)
@@ -313,7 +300,7 @@ class ARTabPFN(nn.Module):
         y_buffer: Tensor,
         x_target: Tensor,
         mask_features: BlockMask,
-        mask_rows: BlockMask, 
+        mask_rows: BlockMask,
         y_target: Optional[Tensor] = None,
     ) -> Tuple[Optional[Tensor], Tensor]:
         """
@@ -338,21 +325,23 @@ class ARTabPFN(nn.Module):
         C = x_context.size(2)  # num features
 
         # Embed context/buffer/targets
-        ctx_emb = self.embedder.embed_context(x_context, y_context)   # [B, Nc, D]
-        buf_emb = self.embedder.embed_buffer(x_buffer, y_buffer) + self.ar_tokens[:x_buffer.size(1)]
-        tgt_emb = self.embedder.embed_target(x_target)                # [B, Nt, D]
+        ctx_emb = self.embedder.embed_context(x_context, y_context)  # [B, Nc, D]
+        buf_emb = (
+            self.embedder.embed_buffer(x_buffer, y_buffer) + self.ar_tokens[: x_buffer.size(1)]
+        )
+        tgt_emb = self.embedder.embed_target(x_target)  # [B, Nt, D]
 
         Nc, Nb, Nt = ctx_emb.size(1), buf_emb.size(1), tgt_emb.size(1)
         R = Nc + Nb + Nt  # total rows
 
-        embeddings = torch.cat([ctx_emb, buf_emb, tgt_emb], dim=1)    # [B, R, D]
-        embeddings = embeddings.unsqueeze(2)                          # [B, R, 1, D]
+        embeddings = torch.cat([ctx_emb, buf_emb, tgt_emb], dim=1)  # [B, R, D]
+        embeddings = embeddings.unsqueeze(2)  # [B, R, 1, D]
 
         # Forward through transformer
-        z, _ = self.backbone(embeddings, mask_features, mask_rows)    # [B, R, 1, D]
+        z, _ = self.backbone(embeddings, mask_features, mask_rows)  # [B, R, 1, D]
 
         # Extract target embeddings
-        z_target = z[:, Nc + Nb:, 0, :]  # [B, Nt, D]
+        z_target = z[:, Nc + Nb :, 0, :]  # [B, Nt, D]
 
         # Predict
         if y_target is not None and y_target.dim() == 2:

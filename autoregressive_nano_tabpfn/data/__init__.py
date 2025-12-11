@@ -6,8 +6,8 @@ from .tabular_sampler import TabularSampler
 from .online_dataset import OnlineTabularDataset
 
 __all__ = [
-    'DataAttr',
-    'MLPSCM',
-    'TabularSampler',
-    'OnlineTabularDataset',
+    "DataAttr",
+    "MLPSCM",
+    "TabularSampler",
+    "OnlineTabularDataset",
 ]

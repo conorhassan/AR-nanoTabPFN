@@ -20,7 +20,9 @@ def test_data_generation():
 
     # Check types
     assert isinstance(batch, DataAttr)
-    assert all(isinstance(getattr(batch, k), torch.Tensor) for k in ["xc", "yc", "xb", "yb", "xt", "yt"])
+    assert all(
+        isinstance(getattr(batch, k), torch.Tensor) for k in ["xc", "yc", "xb", "yb", "xt", "yt"]
+    )
 
     # Check shapes
     B, Nc, D = batch.xc.shape

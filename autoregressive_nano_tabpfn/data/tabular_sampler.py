@@ -77,14 +77,8 @@ class TabularSampler:
         hi = min(dim_x, base_causes + 3)
         actual_num_causes = int(np.random.randint(lo, hi + 1))
 
-        actual_num_layers = np.random.randint(
-            max(2, self.num_layers - 1),
-            self.num_layers + 2
-        )
-        actual_hidden_dim = np.random.randint(
-            max(16, self.hidden_dim - 16),
-            self.hidden_dim + 32
-        )
+        actual_num_layers = np.random.randint(max(2, self.num_layers - 1), self.num_layers + 2)
+        actual_hidden_dim = np.random.randint(max(16, self.hidden_dim - 16), self.hidden_dim + 32)
 
         model = MLPSCM(
             seq_len=num_samples,
@@ -172,8 +166,8 @@ class TabularSampler:
 
             # Split
             xc, yc = X[:nc], y[:nc]
-            xb, yb = X[nc:nc + nb], y[nc:nc + nb]
-            xt, yt = X[nc + nb:], y[nc + nb:]
+            xb, yb = X[nc : nc + nb], y[nc : nc + nb]
+            xt, yt = X[nc + nb :], y[nc + nb :]
 
             # Normalize y using context statistics
             if self.normalize_y:
@@ -194,8 +188,16 @@ class TabularSampler:
         return DataAttr(
             xc=torch.stack(xc_list),
             yc=torch.stack(yc_list),
-            xb=torch.stack(xb_list) if nb > 0 else torch.zeros(batch_size, 0, dim_x, device=self.device, dtype=self.dtype),
-            yb=torch.stack(yb_list) if nb > 0 else torch.zeros(batch_size, 0, self.dim_y, device=self.device, dtype=self.dtype),
+            xb=(
+                torch.stack(xb_list)
+                if nb > 0
+                else torch.zeros(batch_size, 0, dim_x, device=self.device, dtype=self.dtype)
+            ),
+            yb=(
+                torch.stack(yb_list)
+                if nb > 0
+                else torch.zeros(batch_size, 0, self.dim_y, device=self.device, dtype=self.dtype)
+            ),
             xt=torch.stack(xt_list),
             yt=torch.stack(yt_list),
         )

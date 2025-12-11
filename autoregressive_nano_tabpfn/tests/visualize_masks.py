@@ -16,7 +16,6 @@ import torch
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import matplotlib as mpl
-import numpy as np
 
 
 def visualize_row_mask(
@@ -57,7 +56,7 @@ def visualize_row_mask(
     # Build index grids
     m = torch.arange(0, total)
     n = torch.arange(0, total)
-    M, N = torch.meshgrid(m, n, indexing='ij')
+    M, N = torch.meshgrid(m, n, indexing="ij")
 
     # Regions
     q_ctx = M < ctx_end
@@ -87,12 +86,13 @@ def visualize_row_mask(
     # Use same colormap as feature mask for consistency
     try:
         import seaborn as sns
+
         cmap = sns.color_palette("YlOrBr", as_cmap=True)
     except ImportError:
         cmap = plt.cm.YlOrBr
 
     # Navy for blocked, muted yellow for allowed (same as feature mask)
-    navy = torch.tensor([13/255.0, 27/255.0, 42/255.0], dtype=torch.float32)
+    navy = torch.tensor([13 / 255.0, 27 / 255.0, 42 / 255.0], dtype=torch.float32)
     rgba = cmap(0.35)
 
     h, w = total, total
@@ -108,12 +108,17 @@ def visualize_row_mask(
     # Font settings
     mpl.rcParams["font.family"] = "serif"
     mpl.rcParams["font.serif"] = [
-        "TeX Gyre Termes", "STIX Two Text", "Times New Roman", "Times",
-        "Nimbus Roman", "Liberation Serif", "DejaVu Serif",
+        "TeX Gyre Termes",
+        "STIX Two Text",
+        "Times New Roman",
+        "Times",
+        "Nimbus Roman",
+        "Liberation Serif",
+        "DejaVu Serif",
     ]
 
     fig, ax = plt.subplots(figsize=(6, 6))
-    ax.imshow(img.numpy(), aspect='auto', interpolation='nearest')
+    ax.imshow(img.numpy(), aspect="auto", interpolation="nearest")
     ax.set_xlabel(r"$K/V$ (rows)", labelpad=10, fontsize=16)
     ax.set_ylabel(r"$Q$ (rows)", labelpad=10, fontsize=16)
 
@@ -122,18 +127,20 @@ def visualize_row_mask(
     ax.set_title(title, pad=10, fontsize=16)
 
     ax.tick_params(axis="both", length=0, labelbottom=False, labelleft=False)
-    for spine in ['right', 'top']:
+    for spine in ["right", "top"]:
         ax.spines[spine].set_visible(False)
-    for spine in ['left', 'bottom']:
+    for spine in ["left", "bottom"]:
         ax.spines[spine].set_linewidth(1.2)
 
-    ax.add_patch(mpatches.Rectangle((-0.5, -0.5), w, h, fill=False, edgecolor='black', linewidth=1.0))
+    ax.add_patch(
+        mpatches.Rectangle((-0.5, -0.5), w, h, fill=False, edgecolor="black", linewidth=1.0)
+    )
 
     plt.tight_layout()
 
     out_path = Path(path) if path is not None else Path("row_mask.png")
-    out_path = out_path.with_suffix('.png')
-    fig.savefig(out_path, dpi=350, bbox_inches='tight')
+    out_path = out_path.with_suffix(".png")
+    fig.savefig(out_path, dpi=350, bbox_inches="tight")
     plt.close(fig)
     return out_path
 
@@ -157,12 +164,10 @@ def visualize_dense_mask(
     # Use same colormap as row mask for consistency
     try:
         import seaborn as sns
+
         cmap = sns.color_palette("YlOrBr", as_cmap=True)
     except ImportError:
         cmap = plt.cm.YlOrBr
-
-    # Navy background (same as row mask blocked regions)
-    navy = torch.tensor([13/255.0, 27/255.0, 42/255.0], dtype=torch.float32)
 
     # All positions allowed - use same color as context self-attention (val=0.35)
     rgba = cmap(0.35)
@@ -174,12 +179,17 @@ def visualize_dense_mask(
 
     mpl.rcParams["font.family"] = "serif"
     mpl.rcParams["font.serif"] = [
-        "TeX Gyre Termes", "STIX Two Text", "Times New Roman", "Times",
-        "Nimbus Roman", "Liberation Serif", "DejaVu Serif",
+        "TeX Gyre Termes",
+        "STIX Two Text",
+        "Times New Roman",
+        "Times",
+        "Nimbus Roman",
+        "Liberation Serif",
+        "DejaVu Serif",
     ]
 
     fig, ax = plt.subplots(figsize=(6, 6))
-    ax.imshow(img.numpy(), aspect='auto', interpolation='nearest')
+    ax.imshow(img.numpy(), aspect="auto", interpolation="nearest")
     ax.set_xlabel(r"$K/V$ (features)", labelpad=10, fontsize=16)
     ax.set_ylabel(r"$Q$ (features)", labelpad=10, fontsize=16)
 
@@ -188,38 +198,49 @@ def visualize_dense_mask(
     ax.set_title(title, pad=10, fontsize=16)
 
     ax.tick_params(axis="both", length=0, labelbottom=False, labelleft=False)
-    for spine in ['right', 'top']:
+    for spine in ["right", "top"]:
         ax.spines[spine].set_visible(False)
-    for spine in ['left', 'bottom']:
+    for spine in ["left", "bottom"]:
         ax.spines[spine].set_linewidth(1.2)
 
-    ax.add_patch(mpatches.Rectangle((-0.5, -0.5), seq_len, seq_len,
-                                     fill=False, edgecolor='black', linewidth=1.0))
+    ax.add_patch(
+        mpatches.Rectangle(
+            (-0.5, -0.5), seq_len, seq_len, fill=False, edgecolor="black", linewidth=1.0
+        )
+    )
 
     plt.tight_layout()
 
     out_path = Path(path) if path is not None else Path("feature_mask.png")
-    out_path = out_path.with_suffix('.png')
-    fig.savefig(out_path, dpi=350, bbox_inches='tight')
+    out_path = out_path.with_suffix(".png")
+    fig.savefig(out_path, dpi=350, bbox_inches="tight")
     plt.close(fig)
     return out_path
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description='Visualize attention masks')
-    parser.add_argument('--context', '-c', type=int, default=16, help='Context (train) length')
-    parser.add_argument('--buffer', '-b', type=int, default=8, help='Buffer length')
-    parser.add_argument('--target', '-t', type=int, default=32, help='Target (test) length. Must be 2*N*buffer for integer N.')
-    parser.add_argument('--features', '-f', type=int, default=8, help='Number of features')
-    parser.add_argument('--output-dir', '-o', type=str, default='.', help='Output directory')
+    parser = argparse.ArgumentParser(description="Visualize attention masks")
+    parser.add_argument("--context", "-c", type=int, default=16, help="Context (train) length")
+    parser.add_argument("--buffer", "-b", type=int, default=8, help="Buffer length")
+    parser.add_argument(
+        "--target",
+        "-t",
+        type=int,
+        default=32,
+        help="Target (test) length. Must be 2*N*buffer for integer N.",
+    )
+    parser.add_argument("--features", "-f", type=int, default=8, help="Number of features")
+    parser.add_argument("--output-dir", "-o", type=str, default=".", help="Output directory")
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"Generating masks with C={args.context}, B={args.buffer}, T={args.target}, F={args.features}")
+    print(
+        f"Generating masks with C={args.context}, B={args.buffer}, T={args.target}, F={args.features}"
+    )
 
     # Row attention mask (attending_chunks auto-computed as target // (2 * buffer))
     row_path = visualize_row_mask(
