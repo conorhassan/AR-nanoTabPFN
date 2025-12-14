@@ -4,8 +4,9 @@ import argparse
 import math
 import os
 import time
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, List, Optional, Tuple
 
 import torch
 import yaml
@@ -15,6 +16,97 @@ from torch.utils.data import DataLoader
 
 from .model import ARTabPFN, create_dense_mask, create_row_mask
 from .data import OnlineTabularDataset
+
+
+@dataclass
+class DataConfig:
+    batch_size: int = 512
+    num_batches_per_epoch: int = 2000
+    num_workers: int = 0
+    d_list: List[int] = field(default_factory=lambda: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
+    nc_list: List[int] = field(default_factory=lambda: [8, 16, 32, 64, 128, 256, 512, 1024])
+    num_buffer: int = 32
+    num_target: int = 512
+    normalize_y: bool = True
+    dtype: str = "float32"
+    seed: int = 123
+
+
+@dataclass
+class ModelConfig:
+    d_model: int = 64
+    n_heads: int = 4
+    n_layers: int = 12
+    d_ff: int = 128
+    num_features: int = 10
+    buffer_size: int = 32
+    num_components: int = 20
+
+
+@dataclass
+class TrainingConfig:
+    max_steps: int = 20000
+    grad_clip: float = 1.0
+    compile_model: bool = True
+    use_amp: bool = True
+    amp_dtype: str = "bfloat16"
+    log_interval: int = 50
+    val_interval: int = 250
+
+
+@dataclass
+class OptimizerConfig:
+    lr: float = 1e-4
+    betas: Tuple[float, float] = (0.9, 0.95)
+    weight_decay: float = 0.0
+
+
+@dataclass
+class SchedulerConfig:
+    use_scheduler: bool = False
+    warmup_steps: int = 2000
+    total_steps: Optional[int] = None
+
+
+@dataclass
+class CheckpointConfig:
+    save_dir: str = "checkpoints"
+    save_interval: int = 1000
+
+
+@dataclass
+class LoggingConfig:
+    use_wandb: bool = False
+    project: str = "artabpfn"
+    run_name: Optional[str] = None
+
+
+@dataclass
+class Config:
+    device: str = field(default_factory=lambda: "cuda" if torch.cuda.is_available() else "cpu")
+    data: DataConfig = field(default_factory=DataConfig)
+    model: ModelConfig = field(default_factory=ModelConfig)
+    training: TrainingConfig = field(default_factory=TrainingConfig)
+    optimizer: OptimizerConfig = field(default_factory=OptimizerConfig)
+    scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)
+    checkpoint: CheckpointConfig = field(default_factory=CheckpointConfig)
+    logging: LoggingConfig = field(default_factory=LoggingConfig)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "Config":
+        return cls(
+            device=d.get("device", "cuda" if torch.cuda.is_available() else "cpu"),
+            data=DataConfig(**d.get("data", {})),
+            model=ModelConfig(**d.get("model", {})),
+            training=TrainingConfig(**d.get("training", {})),
+            optimizer=OptimizerConfig(**{
+                k: tuple(v) if k == "betas" else v
+                for k, v in d.get("optimizer", {}).items()
+            }),
+            scheduler=SchedulerConfig(**d.get("scheduler", {})),
+            checkpoint=CheckpointConfig(**d.get("checkpoint", {})),
+            logging=LoggingConfig(**d.get("logging", {})),
+        )
 
 
 def get_cosine_schedule_with_warmup(
@@ -33,44 +125,28 @@ def get_cosine_schedule_with_warmup(
     return LambdaLR(optimizer, lr_lambda)
 
 
-def train(
-    model: ARTabPFN,
-    dataset: OnlineTabularDataset,
-    config: dict,
-    device: str = "cuda",
-) -> ARTabPFN:
+def train(model: ARTabPFN, dataset: OnlineTabularDataset, config: Config) -> ARTabPFN:
     """Train ARTabPFN with online data generation."""
-    training_cfg = config.get("training", {})
-    optimizer_cfg = config.get("optimizer", {})
-    scheduler_cfg = config.get("scheduler", {})
-    checkpoint_cfg = config.get("checkpoint", {})
-
-    steps = training_cfg.get("max_steps", 20000)
-    grad_clip = training_cfg.get("grad_clip", 1.0)
-    compile_model = training_cfg.get("compile_model", True)
-    use_amp = training_cfg.get("use_amp", True)
-    log_interval = training_cfg.get("log_interval", 50)
-    save_interval = checkpoint_cfg.get("save_interval", 1000)
-    save_dir = checkpoint_cfg.get("save_dir", "checkpoints")
-
+    device = config.device
     model = model.to(device)
 
-    if compile_model and device == "cuda":
+    if config.training.compile_model and device == "cuda":
         model = torch.compile(model, mode="reduce-overhead")
 
     optimizer = AdamW(
         model.parameters(),
-        lr=optimizer_cfg.get("lr", 1e-4),
-        betas=tuple(optimizer_cfg.get("betas", [0.9, 0.95])),
-        weight_decay=optimizer_cfg.get("weight_decay", 0.0),
+        lr=config.optimizer.lr,
+        betas=config.optimizer.betas,
+        weight_decay=config.optimizer.weight_decay,
     )
 
     scheduler = None
-    if scheduler_cfg.get("use_scheduler", False):
+    if config.scheduler.use_scheduler:
+        total_steps = config.scheduler.total_steps or config.training.max_steps
         scheduler = get_cosine_schedule_with_warmup(
             optimizer,
-            warmup_steps=scheduler_cfg.get("warmup_steps", 2000),
-            total_steps=scheduler_cfg.get("total_steps", steps),
+            warmup_steps=config.scheduler.warmup_steps,
+            total_steps=total_steps,
         )
 
     model.train()
@@ -80,13 +156,13 @@ def train(
 
     mask_cache: Dict[tuple, tuple] = {}
 
-    if save_dir:
-        os.makedirs(save_dir, exist_ok=True)
+    if config.checkpoint.save_dir:
+        os.makedirs(config.checkpoint.save_dir, exist_ok=True)
 
     total_loss = 0.0
     t0 = time.perf_counter()
 
-    for step in range(steps):
+    for step in range(config.training.max_steps):
         try:
             batch = next(data_iter)
         except StopIteration:
@@ -110,7 +186,9 @@ def train(
         else:
             mask_features, mask_rows = mask_cache[cache_key]
 
-        with torch.autocast(device, dtype=torch.bfloat16, enabled=use_amp and device == "cuda"):
+        with torch.autocast(
+            device, dtype=torch.bfloat16, enabled=config.training.use_amp and device == "cuda"
+        ):
             loss = model(
                 x_context=batch.xc,
                 y_context=batch.yc.squeeze(-1),
@@ -123,7 +201,7 @@ def train(
             )
 
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+        torch.nn.utils.clip_grad_norm_(model.parameters(), config.training.grad_clip)
         optimizer.step()
         optimizer.zero_grad()
 
@@ -132,65 +210,67 @@ def train(
 
         total_loss += loss.item()
 
-        if (step + 1) % log_interval == 0:
+        if (step + 1) % config.training.log_interval == 0:
             elapsed = time.perf_counter() - t0
-            avg_loss = total_loss / log_interval
-            steps_per_sec = log_interval / elapsed
+            avg_loss = total_loss / config.training.log_interval
+            steps_per_sec = config.training.log_interval / elapsed
             lr = optimizer.param_groups[0]["lr"]
-            print(f"step {step+1:5d} | loss {avg_loss:.4f} | lr {lr:.2e} | {steps_per_sec:.1f} it/s")
+            print(
+                f"step {step+1:5d} | loss {avg_loss:.4f} | lr {lr:.2e} | {steps_per_sec:.1f} it/s"
+            )
             total_loss = 0.0
             t0 = time.perf_counter()
 
-        if save_dir and save_interval > 0 and (step + 1) % save_interval == 0:
-            ckpt_path = Path(save_dir) / f"step_{step+1}.pt"
+        if (
+            config.checkpoint.save_dir
+            and config.checkpoint.save_interval > 0
+            and (step + 1) % config.checkpoint.save_interval == 0
+        ):
+            ckpt_path = Path(config.checkpoint.save_dir) / f"step_{step+1}.pt"
             torch.save({"step": step + 1, "model": model.state_dict()}, ckpt_path)
             print(f"Saved checkpoint: {ckpt_path}")
 
     return model
 
 
-def load_config(config_path: str) -> dict:
+def load_config(config_path: str) -> Config:
     """Load YAML config file."""
     with open(config_path) as f:
-        return yaml.safe_load(f)
+        return Config.from_dict(yaml.safe_load(f) or {})
 
 
-def main(config: Optional[dict] = None):
+def main(config: Optional[Config] = None):
     if config is None:
-        config = {}
+        config = Config()
 
-    device = config.get("device", "cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Using device: {device}")
-
-    data_cfg = config.get("data", {})
-    model_cfg = config.get("model", {})
+    print(f"Using device: {config.device}")
 
     dataset = OnlineTabularDataset(
-        batch_size=data_cfg.get("batch_size", 512),
-        num_batches=data_cfg.get("num_batches_per_epoch", 2000),
-        d_list=data_cfg.get("d_list", [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]),
-        nc_list=data_cfg.get("nc_list", [8, 16, 32, 64, 128, 256, 512, 1024]),
-        num_buffer=data_cfg.get("num_buffer", 32),
-        num_target=data_cfg.get("num_target", 512),
-        normalize_y=data_cfg.get("normalize_y", True),
-        dtype=getattr(torch, data_cfg.get("dtype", "float32")),
+        batch_size=config.data.batch_size,
+        num_batches=config.data.num_batches_per_epoch,
+        d_list=config.data.d_list,
+        nc_list=config.data.nc_list,
+        num_buffer=config.data.num_buffer,
+        num_target=config.data.num_target,
+        normalize_y=config.data.normalize_y,
+        dtype=getattr(torch, config.data.dtype),
         device="cpu",
-        seed=data_cfg.get("seed", 123),
+        seed=config.data.seed,
     )
 
     model = ARTabPFN(
-        d_model=model_cfg.get("d_model", 64),
-        n_heads=model_cfg.get("n_heads", 4),
-        n_layers=model_cfg.get("n_layers", 12),
-        d_ff=model_cfg.get("d_ff", 128),
-        num_features=model_cfg.get("num_features", 10),
-        buffer_size=model_cfg.get("buffer_size", 32),
-        num_components=model_cfg.get("num_components", 20),
+        d_model=config.model.d_model,
+        n_heads=config.model.n_heads,
+        n_layers=config.model.n_layers,
+        d_ff=config.model.d_ff,
+        num_features=config.model.num_features,
+        buffer_size=config.model.buffer_size,
+        num_components=config.model.num_components,
     )
 
     print(f"Model params: {sum(p.numel() for p in model.parameters()):,}")
 
-    trained_model = train(model, dataset, config, device=device)
+    trained_model = train(model, dataset, config)
     print("Training complete!")
 
     return trained_model
@@ -198,18 +278,25 @@ def main(config: Optional[dict] = None):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", "-c", type=str, default=None, help="Path to YAML config file")
-    parser.add_argument("--max-steps", type=int, default=None, help="Override max training steps")
-    parser.add_argument("--batch-size", type=int, default=None, help="Override batch size")
+    parser.add_argument(
+        "--config", "-c", type=str, default=None, help="Path to YAML config file"
+    )
+    parser.add_argument(
+        "--max-steps", type=int, default=None, help="Override max training steps"
+    )
+    parser.add_argument(
+        "--batch-size", type=int, default=None, help="Override batch size"
+    )
     parser.add_argument("--device", type=str, default=None, help="Override device")
     args = parser.parse_args()
 
-    config = load_config(args.config) if args.config else {}
+    config = load_config(args.config) if args.config else Config()
+
     if args.max_steps is not None:
-        config.setdefault("training", {})["max_steps"] = args.max_steps
+        config.training.max_steps = args.max_steps
     if args.batch_size is not None:
-        config.setdefault("data", {})["batch_size"] = args.batch_size
+        config.data.batch_size = args.batch_size
     if args.device is not None:
-        config["device"] = args.device
+        config.device = args.device
 
     main(config)

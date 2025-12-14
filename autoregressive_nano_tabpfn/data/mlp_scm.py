@@ -92,7 +92,9 @@ class XSampler:
             elif dist_type == "uniform":
                 low = random.uniform(-3, 0)
                 high = random.uniform(0, 3)
-                x[:, i] = torch.rand(self.seq_len, device=self.device) * (high - low) + low
+                x[:, i] = (
+                    torch.rand(self.seq_len, device=self.device) * (high - low) + low
+                )
 
             elif dist_type == "categorical":
                 n_cats = random.randint(2, 10)
@@ -172,7 +174,9 @@ class MLPSCM(nn.Module):
 
         if self.is_causal:
             # Ensure enough intermediate variables for sampling X and y
-            self.hidden_dim = max(self.hidden_dim, self.num_outputs + 2 * self.num_features)
+            self.hidden_dim = max(
+                self.hidden_dim, self.num_outputs + 2 * self.num_features
+            )
         else:
             self.num_causes = self.num_features
 
@@ -201,7 +205,8 @@ class MLPSCM(nn.Module):
 
         if self.pre_sample_noise_std:
             noise_std = (
-                torch.abs(torch.randn(1, out_dim, device=self.device) * self.noise_std) + 1e-6
+                torch.abs(torch.randn(1, out_dim, device=self.device) * self.noise_std)
+                + 1e-6
             )
         else:
             noise_std = self.noise_std
@@ -230,7 +235,9 @@ class MLPSCM(nn.Module):
             return
 
         keep_prob = (n_blocks * block_size[0] * block_size[1]) / param.numel()
-        std = self.init_std / (math.sqrt(keep_prob) if self.scale_init_std_by_dropout else 1)
+        std = self.init_std / (
+            math.sqrt(keep_prob) if self.scale_init_std_by_dropout else 1
+        )
 
         for b in range(n_blocks):
             slices = tuple(slice(d * b, d * (b + 1)) for d in block_size)
@@ -243,7 +250,9 @@ class MLPSCM(nn.Module):
 
         dropout = self.mlp_dropout_prob if idx > 0 else 0
         dropout = min(dropout, 0.99)
-        std = self.init_std / (math.sqrt(1 - dropout) if self.scale_init_std_by_dropout else 1)
+        std = self.init_std / (
+            math.sqrt(1 - dropout) if self.scale_init_std_by_dropout else 1
+        )
 
         nn.init.normal_(param, std=std)
         if dropout > 0:
@@ -289,7 +298,9 @@ class MLPSCM(nn.Module):
             # Contiguous block sampling
             max_start = total_dim - self.num_outputs - self.num_features
             start = random.randint(0, max(0, max_start))
-            perm = start + torch.arange(self.num_outputs + self.num_features, device=self.device)
+            perm = start + torch.arange(
+                self.num_outputs + self.num_features, device=self.device
+            )
         else:
             # Random sampling
             perm = torch.randperm(total_dim - 1, device=self.device)

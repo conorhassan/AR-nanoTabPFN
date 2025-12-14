@@ -3,7 +3,11 @@
 import torch
 
 from autoregressive_nano_tabpfn.data import DataAttr, TabularSampler
-from autoregressive_nano_tabpfn.model import ARTabPFN, create_dense_mask, create_row_mask
+from autoregressive_nano_tabpfn.model import (
+    ARTabPFN,
+    create_dense_mask,
+    create_row_mask,
+)
 
 CUDA_AVAILABLE = torch.cuda.is_available()
 
@@ -21,7 +25,8 @@ def test_data_generation():
     # Check types
     assert isinstance(batch, DataAttr)
     assert all(
-        isinstance(getattr(batch, k), torch.Tensor) for k in ["xc", "yc", "xb", "yb", "xt", "yt"]
+        isinstance(getattr(batch, k), torch.Tensor)
+        for k in ["xc", "yc", "xb", "yb", "xt", "yt"]
     )
 
     # Check shapes
@@ -124,7 +129,9 @@ def test_backward():
 
     Nc, Nb, Nt = batch.xc.size(1), batch.xb.size(1), batch.xt.size(1)
     mask_features = create_dense_mask(seq_len=1, device=device)
-    mask_rows = create_row_mask(num_rows=Nc + Nb + Nt, context_len=Nc, buffer_len=Nb, device=device)
+    mask_rows = create_row_mask(
+        num_rows=Nc + Nb + Nt, context_len=Nc, buffer_len=Nb, device=device
+    )
 
     loss = model(
         x_context=batch.xc,
@@ -140,7 +147,9 @@ def test_backward():
     loss.backward()
 
     # Check gradients exist
-    grad_norm = sum(p.grad.norm().item() for p in model.parameters() if p.grad is not None)
+    grad_norm = sum(
+        p.grad.norm().item() for p in model.parameters() if p.grad is not None
+    )
     assert grad_norm > 0
 
     print(f"✓ Backward pass: grad_norm={grad_norm:.4f}")

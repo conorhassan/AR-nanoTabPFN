@@ -113,10 +113,16 @@ if HAS_TRITON:
             )
 
             k_tile = tl.load(
-                kc_ptrs, mask=mask_n[:, None] & mask_d[None, :], other=0.0, cache_modifier=".cg"
+                kc_ptrs,
+                mask=mask_n[:, None] & mask_d[None, :],
+                other=0.0,
+                cache_modifier=".cg",
             ).to(tl.float32)
             v_tile = tl.load(
-                vc_ptrs, mask=mask_n[:, None] & mask_d[None, :], other=0.0, cache_modifier=".cg"
+                vc_ptrs,
+                mask=mask_n[:, None] & mask_d[None, :],
+                other=0.0,
+                cache_modifier=".cg",
             ).to(tl.float32)
 
             # Compute attention scores
@@ -220,7 +226,9 @@ def pytorch_cross_attention(q: Tensor, k_ctx: Tensor, v_ctx: Tensor) -> Tensor:
     return torch.matmul(attn, v)
 
 
-def cross_attention(q: Tensor, k_ctx: Tensor, v_ctx: Tensor, use_triton: bool = True) -> Tensor:
+def cross_attention(
+    q: Tensor, k_ctx: Tensor, v_ctx: Tensor, use_triton: bool = True
+) -> Tensor:
     """
     Cross-attention dispatcher.
 

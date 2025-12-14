@@ -150,12 +150,19 @@ def create_row_mask(
         final_mask_mod.__name__ = f"row_mask_{num_rows}_{context_len}_{buffer_len}"
 
         _mask_cache[key] = create_block_mask(
-            final_mask_mod, B=None, H=None, Q_LEN=num_rows, KV_LEN=num_rows, device=device
+            final_mask_mod,
+            B=None,
+            H=None,
+            Q_LEN=num_rows,
+            KV_LEN=num_rows,
+            device=device,
         )
     return _mask_cache[key]
 
 
-def create_context_self_attention_mask(context_len: int, device: str = "cuda") -> BlockMask:
+def create_context_self_attention_mask(
+    context_len: int, device: str = "cuda"
+) -> BlockMask:
     """Dense self-attention mask for context encoding (used in inference)."""
     key = ("context_self", context_len, device)
     if key not in _mask_cache:
@@ -164,7 +171,12 @@ def create_context_self_attention_mask(context_len: int, device: str = "cuda") -
             return q_idx >= 0  # Always true (dense)
 
         _mask_cache[key] = create_block_mask(
-            mask_mod, B=None, H=None, Q_LEN=context_len, KV_LEN=context_len, device=device
+            mask_mod,
+            B=None,
+            H=None,
+            Q_LEN=context_len,
+            KV_LEN=context_len,
+            device=device,
         )
     return _mask_cache[key]
 

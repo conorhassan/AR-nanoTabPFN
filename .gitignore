@@ -1,3 +1,9 @@
 __pycache__/
 *.pth
 *.h5
+
+# Local files
+feature_mask.png
+row_mask.png
+autoregressive_nano_tabpfn/INFERENCE_ENGINE_PLAN.md
+ace-v1_5/

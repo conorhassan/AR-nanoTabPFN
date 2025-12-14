@@ -64,7 +64,9 @@ class TabularSampler:
         self.noise_std = noise_std
         self.sampling = sampling
 
-    def _generate_function(self, num_samples: int, dim_x: int) -> Tuple[torch.Tensor, torch.Tensor]:
+    def _generate_function(
+        self, num_samples: int, dim_x: int
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         """Generate a single regression function with fixed dimensionality."""
 
         # Randomize MLP-SCM hyperparameters slightly for diversity
@@ -77,8 +79,12 @@ class TabularSampler:
         hi = min(dim_x, base_causes + 3)
         actual_num_causes = int(np.random.randint(lo, hi + 1))
 
-        actual_num_layers = np.random.randint(max(2, self.num_layers - 1), self.num_layers + 2)
-        actual_hidden_dim = np.random.randint(max(16, self.hidden_dim - 16), self.hidden_dim + 32)
+        actual_num_layers = np.random.randint(
+            max(2, self.num_layers - 1), self.num_layers + 2
+        )
+        actual_hidden_dim = np.random.randint(
+            max(16, self.hidden_dim - 16), self.hidden_dim + 32
+        )
 
         model = MLPSCM(
             seq_len=num_samples,
@@ -191,12 +197,16 @@ class TabularSampler:
             xb=(
                 torch.stack(xb_list)
                 if nb > 0
-                else torch.zeros(batch_size, 0, dim_x, device=self.device, dtype=self.dtype)
+                else torch.zeros(
+                    batch_size, 0, dim_x, device=self.device, dtype=self.dtype
+                )
             ),
             yb=(
                 torch.stack(yb_list)
                 if nb > 0
-                else torch.zeros(batch_size, 0, self.dim_y, device=self.device, dtype=self.dtype)
+                else torch.zeros(
+                    batch_size, 0, self.dim_y, device=self.device, dtype=self.dtype
+                )
             ),
             xt=torch.stack(xt_list),
             yt=torch.stack(yt_list),

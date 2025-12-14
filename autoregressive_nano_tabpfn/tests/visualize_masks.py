@@ -17,7 +17,6 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import matplotlib as mpl
 
-from autoregressive_nano_tabpfn.model.attention import create_row_mask, create_dense_mask
 
 
 def visualize_row_mask(
@@ -135,7 +134,9 @@ def visualize_row_mask(
         ax.spines[spine].set_linewidth(1.2)
 
     ax.add_patch(
-        mpatches.Rectangle((-0.5, -0.5), w, h, fill=False, edgecolor="black", linewidth=1.0)
+        mpatches.Rectangle(
+            (-0.5, -0.5), w, h, fill=False, edgecolor="black", linewidth=1.0
+        )
     )
 
     plt.tight_layout()
@@ -224,7 +225,9 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description="Visualize attention masks")
-    parser.add_argument("--context", "-c", type=int, default=16, help="Context (train) length")
+    parser.add_argument(
+        "--context", "-c", type=int, default=16, help="Context (train) length"
+    )
     parser.add_argument("--buffer", "-b", type=int, default=8, help="Buffer length")
     parser.add_argument(
         "--target",
@@ -233,8 +236,12 @@ if __name__ == "__main__":
         default=32,
         help="Target (test) length. Must be 2*N*buffer for integer N.",
     )
-    parser.add_argument("--features", "-f", type=int, default=8, help="Number of features")
-    parser.add_argument("--output-dir", "-o", type=str, default=".", help="Output directory")
+    parser.add_argument(
+        "--features", "-f", type=int, default=8, help="Number of features"
+    )
+    parser.add_argument(
+        "--output-dir", "-o", type=str, default=".", help="Output directory"
+    )
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)

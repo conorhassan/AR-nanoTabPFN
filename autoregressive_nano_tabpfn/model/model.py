@@ -37,9 +37,14 @@ class Embedder(nn.Module):
         self.marker_embed = nn.Embedding(3, d_model)
         self._marker_lookup = {"target": 0, "context": 1, "buffer": 2}
 
-    def _get_marker(self, batch_size: int, marker_type: str, device: torch.device) -> Tensor:
+    def _get_marker(
+        self, batch_size: int, marker_type: str, device: torch.device
+    ) -> Tensor:
         idx = torch.full(
-            (batch_size, 1), self._marker_lookup[marker_type], dtype=torch.long, device=device
+            (batch_size, 1),
+            self._marker_lookup[marker_type],
+            dtype=torch.long,
+            device=device,
         )
         return self.marker_embed(idx)
 
@@ -84,7 +89,9 @@ class TwoStageTransformerLayer(nn.Module):
         self.attn_features = MultiheadAttention(d_model, n_heads)
         self.attn_rows = MultiheadAttention(d_model, n_heads)
 
-        self.ff = nn.Sequential(nn.Linear(d_model, d_ff), nn.GELU(), nn.Linear(d_ff, d_model))
+        self.ff = nn.Sequential(
+            nn.Linear(d_model, d_ff), nn.GELU(), nn.Linear(d_ff, d_model)
+        )
 
         self.norm1 = nn.LayerNorm(d_model)
         self.norm2 = nn.LayerNorm(d_model)
@@ -163,21 +170,25 @@ class MixtureGaussianHead(nn.Module):
 
         # Head outputs: mean, std, weight for each component
         self.head = nn.Sequential(
-            nn.Linear(d_model, d_ff), nn.GELU(), nn.Linear(d_ff, num_components * dim_y * 3)
+            nn.Linear(d_model, d_ff),
+            nn.GELU(),
+            nn.Linear(d_ff, num_components * dim_y * 3),
         )
 
         # Mixture initialization
         self.mean_bias = nn.Parameter(torch.linspace(-1.0, 1.0, num_components))
         delta = 1.0 / (num_components - 1)
-        self.std_bias = nn.Parameter(torch.ones(num_components) * self._inv_softplus(delta))
+        self.std_bias = nn.Parameter(
+            torch.ones(num_components) * self._inv_softplus(delta)
+        )
         self.weight_bias = nn.Parameter(torch.zeros(num_components))
 
     @staticmethod
     def _inv_softplus(y: float) -> float:
         return math.log(math.exp(y) - 1)
 
-    def _parameterize(self, z: Tensor) -> Tuple[Tensor, Tensor, Tensor]:
-        """Convert network output to mixture parameters."""
+    def _parameterize(self, z: Tensor) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
+        """Convert network output to mixture parameters (mean, std, weight, log_weight)."""
         B, T, _ = z.shape
         K, D = self.num_components, self.dim_y
 
@@ -185,10 +196,17 @@ class MixtureGaussianHead(nn.Module):
         raw_mean, raw_std, raw_weight = raw.unbind(dim=-1)
 
         mean = raw_mean + self.mean_bias[None, None, :, None]
-        std = F.softplus(raw_std + self.std_bias[None, None, :, None]).clamp(max=2.0) + self.std_min
-        weight = F.softmax(raw_weight + self.weight_bias[None, None, :, None], dim=2)
+        std = (
+            F.softplus(raw_std + self.std_bias[None, None, :, None]).clamp(max=2.0)
+            + self.std_min
+        )
 
-        return mean, std, weight
+        log_weight = F.log_softmax(
+            raw_weight + self.weight_bias[None, None, :, None], dim=2
+        )
+        weight = log_weight.exp()
+
+        return mean, std, weight, log_weight
 
     def forward(
         self,
@@ -206,11 +224,11 @@ class MixtureGaussianHead(nn.Module):
             loss: scalar loss (if y provided)
             mean, std, weight: mixture parameters
         """
-        mean, std, weight = self._parameterize(z)
+        mean, std, weight, log_weight = self._parameterize(z)
 
         loss = None
         if y is not None:
-            ll = self._log_likelihood(y, mean, std, weight)
+            ll = self._log_likelihood(y, mean, std, log_weight)
             if loss_mask is not None:
                 ll = ll.mean(-1) * loss_mask
                 denom = loss_mask.sum().clamp(min=1)
@@ -220,16 +238,19 @@ class MixtureGaussianHead(nn.Module):
 
         return loss, mean, std, weight
 
-    def _log_likelihood(self, y: Tensor, mean: Tensor, std: Tensor, weight: Tensor) -> Tensor:
-        """Compute log-likelihood under mixture."""
-        y = y.unsqueeze(2)  # [B, T, 1, D] for broadcasting with [B, T, K, D]
-        log_prob = -0.5 * (math.log(2 * math.pi) + 2 * std.log() + ((y - mean) / std) ** 2)
-        log_prob = log_prob + weight.clamp(min=1e-12).log()
-        return torch.logsumexp(log_prob, dim=2)  # [B, T, D]
+    def _log_likelihood(
+        self, y: Tensor, mean: Tensor, std: Tensor, log_weight: Tensor
+    ) -> Tensor:
+        y = y.unsqueeze(2)
+        log_prob = -0.5 * (
+            math.log(2 * math.pi) + 2 * std.log() + ((y - mean) / std) ** 2
+        )
+        log_prob = log_prob + log_weight
+        return torch.logsumexp(log_prob, dim=2)
 
     def sample(self, z: Tensor, num_samples: int = 1) -> Tensor:
         """Sample from the mixture distribution."""
-        mean, std, weight = self._parameterize(z)
+        mean, std, weight, _ = self._parameterize(z)
         B, T, K, D = mean.shape
 
         weight_flat = weight.permute(0, 1, 3, 2).reshape(B * T * D, K)
@@ -247,9 +268,9 @@ class MixtureGaussianHead(nn.Module):
 
     def log_likelihood(self, z: Tensor, y: Tensor) -> Tensor:
         """Compute log-likelihood for evaluation."""
-        mean, std, weight = self._parameterize(z)
-        ll = self._log_likelihood(y, mean, std, weight)
-        return ll.sum(dim=-1)  # [B, T]
+        mean, std, _, log_weight = self._parameterize(z)
+        ll = self._log_likelihood(y, mean, std, log_weight)
+        return ll.sum(dim=-1)
 
 
 class ARTabPFN(nn.Module):
@@ -287,7 +308,9 @@ class ARTabPFN(nn.Module):
 
         self.embedder = Embedder(d_model)
         self.backbone = TwoStageTransformer(d_model, n_heads, n_layers, d_ff)
-        self.head = MixtureGaussianHead(d_model, d_ff, dim_y=1, num_components=num_components)
+        self.head = MixtureGaussianHead(
+            d_model, d_ff, dim_y=1, num_components=num_components
+        )
 
         # AR position tokens
         self.ar_tokens = nn.Parameter(torch.randn(buffer_size, d_model) * 0.02)
@@ -321,20 +344,17 @@ class ARTabPFN(nn.Module):
             mean: Predicted means [B, Nt, K, 1]
         """
 
-        B = x_context.size(0)
-        C = x_context.size(2)  # num features
-
         # Embed context/buffer/targets
         ctx_emb = self.embedder.embed_context(x_context, y_context)  # [B, Nc, D]
         buf_emb = (
-            self.embedder.embed_buffer(x_buffer, y_buffer) + self.ar_tokens[: x_buffer.size(1)]
+            self.embedder.embed_buffer(x_buffer, y_buffer)
+            + self.ar_tokens[: x_buffer.size(1)]
         )
         tgt_emb = self.embedder.embed_target(x_target)  # [B, Nt, D]
 
         Nc, Nb, Nt = ctx_emb.size(1), buf_emb.size(1), tgt_emb.size(1)
-        R = Nc + Nb + Nt  # total rows
 
-        embeddings = torch.cat([ctx_emb, buf_emb, tgt_emb], dim=1)  # [B, R, D]
+        embeddings = torch.cat([ctx_emb, buf_emb, tgt_emb], dim=1)
         embeddings = embeddings.unsqueeze(2)  # [B, R, 1, D]
 
         # Forward through transformer

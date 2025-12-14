@@ -8,7 +8,11 @@ from typing import Optional
 
 import torch
 from torch import Tensor
-from torch.nn.attention.flex_attention import flex_attention, create_block_mask, BlockMask
+from torch.nn.attention.flex_attention import (
+    flex_attention,
+    create_block_mask,
+    BlockMask,
+)
 
 from .attention import create_dense_mask
 
@@ -115,7 +119,7 @@ class ARTabPFNPredictor:
 
         # Apply final norm (though we don't need the output, just the cached KV)
         self.seq_len = Nc
-    
+
     # Autoregressive decoding
     @torch.no_grad()
     def transformer_decode(self, embedding: Tensor, commit: int) -> Tensor:
@@ -139,8 +143,6 @@ class ARTabPFNPredictor:
         # Feature mask (trivial C=1)
         feature_mask = create_dense_mask(seq_len=1, device=x.device)
 
-        # Row mask: causal over [cached + new]
-        total_len = self.seq_len + N
         row_mask = self._create_decode_mask(
             num_cached=self.seq_len, num_new=N, device=x.device
         )
@@ -186,7 +188,7 @@ class ARTabPFNPredictor:
             buffer_emb = buffer_emb + self.ar_tokens[ar_idx]
 
             # Batch [buffer, target] together
-            embedding = torch.cat([buffer_emb, target_emb], dim=1)   # [B, 2, D]
+            embedding = torch.cat([buffer_emb, target_emb], dim=1)  # [B, 2, D]
             commit = 1  # Commit buffer, not target
         else:
             # First target, no buffer
@@ -376,10 +378,19 @@ class ARTabPFNPredictor:
             target_to_buffer = kv_is_buffer & (buffer_kv_idx < target_idx)
 
             # Combine: buffers use buffer_causal, targets use target_to_buffer
-            return attends_context | (is_buffer_query & buffer_causal) | (is_target_query & target_to_buffer)
+            return (
+                attends_context
+                | (is_buffer_query & buffer_causal)
+                | (is_target_query & target_to_buffer)
+            )
 
         return create_block_mask(
-            teacher_forcing_mod, B=None, H=None, Q_LEN=num_new, KV_LEN=total, device=device
+            teacher_forcing_mod,
+            B=None,
+            H=None,
+            Q_LEN=num_new,
+            KV_LEN=total,
+            device=device,
         )
 
     def _layer_forward_with_cache(

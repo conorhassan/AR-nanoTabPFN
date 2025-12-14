@@ -57,8 +57,12 @@ def test_context_prefill_matches_forward():
     torch.manual_seed(42)
 
     model = ARTabPFN(
-        num_features=4, d_model=32, n_heads=2, n_layers=2,
-        buffer_size=4, num_components=3,
+        num_features=4,
+        d_model=32,
+        n_heads=2,
+        n_layers=2,
+        buffer_size=4,
+        num_components=3,
     )
     model.eval()
 
@@ -75,7 +79,11 @@ def test_context_prefill_matches_forward():
     feature_mask = create_dense_mask(seq_len=1, device="cpu")
     row_mask = create_block_mask(
         lambda b, h, q, k: q >= k,  # causal
-        B=None, H=None, Q_LEN=Nc, KV_LEN=Nc, device="cpu"
+        B=None,
+        H=None,
+        Q_LEN=Nc,
+        KV_LEN=Nc,
+        device="cpu",
     )
 
     z_forward, _ = model.backbone(ctx_emb, feature_mask, row_mask)
@@ -102,8 +110,12 @@ def test_teacher_forcing_matches_forward():
     torch.manual_seed(42)
 
     model = ARTabPFN(
-        num_features=4, d_model=32, n_heads=2, n_layers=2,
-        buffer_size=4, num_components=3,
+        num_features=4,
+        d_model=32,
+        n_heads=2,
+        n_layers=2,
+        buffer_size=4,
+        num_components=3,
     )
     model.eval()
 
@@ -156,8 +168,12 @@ def test_first_target_no_buffer():
     torch.manual_seed(42)
 
     model = ARTabPFN(
-        num_features=4, d_model=32, n_heads=2, n_layers=2,
-        buffer_size=4, num_components=3,
+        num_features=4,
+        d_model=32,
+        n_heads=2,
+        n_layers=2,
+        buffer_size=4,
+        num_components=3,
     )
     model.eval()
 
@@ -184,8 +200,12 @@ def test_first_sample_matches_forward():
     torch.manual_seed(42)
 
     model = ARTabPFN(
-        num_features=4, d_model=32, n_heads=2, n_layers=2,
-        buffer_size=4, num_components=3,
+        num_features=4,
+        d_model=32,
+        n_heads=2,
+        n_layers=2,
+        buffer_size=4,
+        num_components=3,
     )
     model.eval()
 
@@ -203,6 +223,7 @@ def test_first_sample_matches_forward():
 
     # Mask: context dense, target sees only context
     total = Nc + 1
+
     def mask_mod(b, h, q, k):
         q_is_ctx = q < Nc
         k_is_ctx = k < Nc
@@ -211,7 +232,9 @@ def test_first_sample_matches_forward():
         return ctx_dense | tgt_to_ctx
 
     feature_mask = create_dense_mask(seq_len=1, device="cpu")
-    row_mask = create_block_mask(mask_mod, B=None, H=None, Q_LEN=total, KV_LEN=total, device="cpu")
+    row_mask = create_block_mask(
+        mask_mod, B=None, H=None, Q_LEN=total, KV_LEN=total, device="cpu"
+    )
 
     z_forward, _ = model.backbone(embeddings, feature_mask, row_mask)
     z_target_fwd = z_forward[:, Nc:, 0, :]  # [B, 1, D]
@@ -238,8 +261,12 @@ def test_sample_sequence_shape_and_finiteness():
     torch.manual_seed(42)
 
     model = ARTabPFN(
-        num_features=4, d_model=32, n_heads=2, n_layers=2,
-        buffer_size=4, num_components=3,
+        num_features=4,
+        d_model=32,
+        n_heads=2,
+        n_layers=2,
+        buffer_size=4,
+        num_components=3,
     )
     model.eval()
 
