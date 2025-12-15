@@ -1,6 +1,6 @@
-# AR-nanoTabPFN
+# AR-TabPFN
 
-Autoregressive Sampling and Evaluation from TabPFN model with efficient KV-cached inference.
+Efficient *autoregressive sampling* and *log-density evaluation* from TabPFN model.
 
 ## Install
 
