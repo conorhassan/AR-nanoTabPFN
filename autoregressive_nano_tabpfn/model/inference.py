@@ -1,10 +1,11 @@
 """
 Autoregressive predictor for ARTabPFN with KV caching.
 
-Uses flex_attention for sampling and log-likelihood evaluation.
+Uses flex_attention by default with an optional Triton backend for shared-context decode.
 """
 
 from typing import Optional
+import warnings
 
 import torch
 from torch import Tensor
@@ -15,37 +16,60 @@ from torch.nn.attention.flex_attention import (
 )
 
 from .attention import create_dense_mask
+from .triton_kernels import hybrid_attention, triton_available
+
+if torch.cuda.is_available():
+    try:
+        flex_attention = torch.compile(flex_attention)
+    except Exception as exc:
+        warnings.warn(f"Failed to compile flex_attention: {exc}", RuntimeWarning)
 
 
 class ARTabPFNPredictor:
     """Methods for joint sampling and log-density evaluation."""
 
-    def __init__(self, embedder, backbone, head, ar_tokens):
+    def __init__(self, embedder, backbone, head, ar_tokens, backend: str = "flex_attention"):
         """
         Args:
             embedder: Embedder module (embed_context, embed_buffer, embed_target)
             backbone: TwoStageTransformer module
             head: MixtureGaussianHead module
             ar_tokens: [buffer_size, d_model] AR position embeddings
+            backend: "flex_attention" (default) or "triton"
         """
         self.embedder = embedder
         self.backbone = backbone
         self.head = head
         self.ar_tokens = ar_tokens
 
+        if backend not in ("flex_attention", "triton"):
+            raise ValueError(f"Unsupported backend: {backend}")
+        if backend == "triton" and not triton_available():
+            warnings.warn(
+                "Triton not available; hybrid attention will use PyTorch context attention.",
+                RuntimeWarning,
+            )
+        self.backend = backend
+
         # Cache state (set and updated during inference)
-        self.seq_len = 0  # Current committed sequence length
+        self.seq_len = 0  # Current committed sequence length (flex path)
+        self.context_len = 0  # Context length (triton path)
+        self.buffer_len = 0  # Buffer length (triton path)
+        self.max_buffer_len = 0  # Allocated buffer capacity (triton path)
         self._device = None
         self._dtype = None
 
     @classmethod
-    def from_trained_model(cls, model) -> "ARTabPFNPredictor":
+    def from_trained_model(
+        cls, model, backend: str = "flex_attention"
+    ) -> "ARTabPFNPredictor":
         """Create predictor from a trained ARTabPFN model."""
         return cls(
             embedder=model.embedder,
             backbone=model.backbone,
             head=model.head,
             ar_tokens=model.ar_tokens,
+            backend=backend,
         )
 
     # Cache management
@@ -61,7 +85,8 @@ class ARTabPFNPredictor:
 
         Args:
             batch_size: Batch size B
-            max_seq_len: Maximum sequence length (context + all buffers)
+            max_seq_len: Maximum sequence length (context + all buffers) for flex,
+                or maximum buffer length for triton.
             device: Device for cache tensors
             dtype: Data type for cache tensors
         """
@@ -73,6 +98,23 @@ class ARTabPFNPredictor:
         self._device = device
         self._dtype = dtype
 
+        if self.backend == "triton":
+            max_buf_len = max_seq_len
+            self.max_buffer_len = max_buf_len
+            for layer in self.backbone.layers:
+                H = layer.attn_rows.n_heads
+                Dh = layer.attn_rows.head_dim
+                layer.k_ctx_cache = torch.empty((H, 0, Dh), device=device, dtype=dtype)
+                layer.v_ctx_cache = torch.empty_like(layer.k_ctx_cache)
+                layer.k_buf_cache = torch.zeros(
+                    batch_size, H, max_buf_len, Dh, device=device, dtype=dtype
+                )
+                layer.v_buf_cache = torch.zeros_like(layer.k_buf_cache)
+            self.context_len = 0
+            self.buffer_len = 0
+            self.seq_len = 0
+            return
+
         for layer in self.backbone.layers:
             H = layer.attn_rows.n_heads
             Dh = layer.attn_rows.head_dim
@@ -82,10 +124,15 @@ class ARTabPFNPredictor:
             layer.v_cache = torch.zeros_like(layer.k_cache)
 
         self.seq_len = 0
+        self.context_len = 0
+        self.buffer_len = 0
+        self.max_buffer_len = 0
 
     def clear_cache(self) -> None:
         """Reset cache state (keeps allocated memory)."""
         self.seq_len = 0
+        self.context_len = 0
+        self.buffer_len = 0
 
     @torch.no_grad()
     def prefill_context(self, x_context: Tensor, y_context: Tensor) -> None:
@@ -100,6 +147,10 @@ class ARTabPFNPredictor:
             x_context: [B, Nc, num_features] context features
             y_context: [B, Nc] context targets
         """
+        if self.backend == "triton":
+            self.prefill_context_triton(x_context, y_context)
+            return
+
         # Embed context
         ctx_emb = self.embedder.embed_context(x_context, y_context)  # [B, Nc, D]
         B, Nc, D = ctx_emb.shape
@@ -119,6 +170,51 @@ class ARTabPFNPredictor:
 
         # Apply final norm (though we don't need the output, just the cached KV)
         self.seq_len = Nc
+
+    @torch.no_grad()
+    def prefill_context_triton(self, x_context: Tensor, y_context: Tensor) -> None:
+        """
+        Encode context and populate shared KV cache for Triton backend.
+
+        Key optimization: Since context is shared across the batch, we only
+        process B=1 during prefill, giving B times compute and memory savings.
+        """
+        B_full = x_context.shape[0]
+        Nc = x_context.shape[1]
+
+        # Use only first batch element - context is shared!
+        x_ctx_single = x_context[0:1]  # [1, Nc, F]
+        y_ctx_single = y_context[0:1]  # [1, Nc]
+
+        # Embed context with B=1
+        ctx_emb = self.embedder.embed_context(x_ctx_single, y_ctx_single)  # [1, Nc, D]
+        _, _, D = ctx_emb.shape
+
+        # Expand for two-stage attention: [1, Nc, 1, D]
+        x = ctx_emb.unsqueeze(2)
+
+        # Get masks (context uses dense self-attention, not causal)
+        feature_mask = create_dense_mask(seq_len=1, device=x.device)
+        row_mask = create_dense_mask(seq_len=Nc, device=x.device)
+
+        # Run through transformer layers with B=1, caching KV
+        for layer in self.backbone.layers:
+            H = layer.attn_rows.n_heads
+            Dh = layer.attn_rows.head_dim
+            if layer.k_ctx_cache.shape[1] != Nc or layer.k_ctx_cache.shape[0] != H:
+                layer.k_ctx_cache = torch.zeros(
+                    H, Nc, Dh, device=x.device, dtype=x.dtype
+                )
+                layer.v_ctx_cache = torch.zeros_like(layer.k_ctx_cache)
+            x = self._layer_forward_with_cache_triton(
+                layer, x, feature_mask, row_mask, cache_start=0
+            )
+
+        # Update lengths
+        self.context_len = Nc
+        self.buffer_len = 0
+        self.seq_len = Nc
+        self._prefill_batch_size = B_full  # Remember original batch size
 
     # Autoregressive decoding
     @torch.no_grad()
@@ -142,6 +238,21 @@ class ARTabPFNPredictor:
 
         # Feature mask (trivial C=1)
         feature_mask = create_dense_mask(seq_len=1, device=x.device)
+        if self.backend == "triton":
+            if self.buffer_len + commit > self.max_buffer_len:
+                raise ValueError(
+                    "Triton buffer cache exceeded; increase max buffer length."
+                )
+            # Run through transformer layers using shared-context attention
+            for layer in self.backbone.layers:
+                x = self._layer_decode_with_cache_triton(layer, x, feature_mask)
+
+            # Commit only buffer positions (targets are never committed)
+            self.buffer_len += commit
+            self.seq_len = self.context_len + self.buffer_len
+
+            # Apply final norm and squeeze
+            return self.backbone.norm(x.squeeze(2))
 
         row_mask = self._create_decode_mask(
             num_cached=self.seq_len, num_new=N, device=x.device
@@ -227,8 +338,12 @@ class ARTabPFNPredictor:
         device, dtype = x_context.device, x_context.dtype
 
         # Setup cache
-        max_seq = Nc + Nt  # Context + all buffers
-        self.init_kv_cache(B, max_seq, device, dtype)
+        if self.backend == "triton":
+            max_buf = Nt  # Buffer only; context is cached separately
+            self.init_kv_cache(B, max_buf, device, dtype)
+        else:
+            max_seq = Nc + Nt  # Context + all buffers
+            self.init_kv_cache(B, max_seq, device, dtype)
         self.prefill_context(x_context, y_context)
 
         # Autoregressive generation
@@ -260,6 +375,32 @@ class ARTabPFNPredictor:
         Returns:
             log_density: [B, Nt] log-density of each y_target under the model
         """
+        if self.backend == "triton":
+            warnings.warn(
+                "Triton backend does not support teacher forcing; falling back to flex_attention.",
+                RuntimeWarning,
+            )
+            original_backend = self.backend
+            self.backend = "flex_attention"
+            try:
+                return self._evaluate_joint_density_flex(
+                    x_context, y_context, x_target, y_target
+                )
+            finally:
+                self.backend = original_backend
+
+        return self._evaluate_joint_density_flex(
+            x_context, y_context, x_target, y_target
+        )
+
+    @torch.no_grad()
+    def _evaluate_joint_density_flex(
+        self,
+        x_context: Tensor,
+        y_context: Tensor,
+        x_target: Tensor,
+        y_target: Tensor,
+    ) -> Tensor:
         B, Nc, _ = x_context.shape
         Nt = x_target.shape[1]
         device, dtype = x_context.device, x_context.dtype
@@ -447,6 +588,60 @@ class ARTabPFNPredictor:
 
         return x_out.unsqueeze(2)  # [B, R, 1, D]
 
+    def _layer_forward_with_cache_triton(
+        self,
+        layer,
+        x: Tensor,
+        feature_mask: BlockMask,
+        row_mask: BlockMask,
+        cache_start: int,
+    ) -> Tensor:
+        """
+        Forward through one layer during prefill, caching shared context KV.
+
+        Args:
+            layer: TwoStageTransformerLayer
+            x: [B, R, C, D] input (C=1)
+            feature_mask: Mask for feature attention
+            row_mask: Mask for row attention
+            cache_start: Where to start writing in context cache
+
+        Returns:
+            [B, R, C, D] output
+        """
+        B, R, C, D = x.shape
+
+        # Feature attention
+        x_feat = x.reshape(B * R, C, D)
+        attn_out, _ = layer.attn_features(x_feat, x_feat, x_feat, feature_mask)
+        x = layer.norm1((attn_out + x_feat).reshape(B, R, C, D))
+
+        # Row attention - cache KV here (shared context)
+        x_row = x.squeeze(2)
+
+        H = layer.attn_rows.n_heads
+        Dh = layer.attn_rows.head_dim
+
+        q = layer.attn_rows.q_proj(x_row).view(B, R, H, Dh).transpose(1, 2)
+        k = layer.attn_rows.k_proj(x_row).view(B, R, H, Dh).transpose(1, 2)
+        v = layer.attn_rows.v_proj(x_row).view(B, R, H, Dh).transpose(1, 2)
+
+        # Cache K, V from the first batch element
+        layer.k_ctx_cache[:, cache_start : cache_start + R, :] = k[0]
+        layer.v_ctx_cache[:, cache_start : cache_start + R, :] = v[0]
+
+        # Attention
+        attn_out = flex_attention(q, k, v, block_mask=row_mask)
+        attn_out = attn_out.transpose(1, 2).reshape(B, R, D)
+        attn_out = layer.attn_rows.out_proj(attn_out)
+
+        x_row = layer.norm2(x_row + attn_out)
+
+        # FFN
+        x_out = layer.norm3(x_row + layer.ff(x_row))
+
+        return x_out.unsqueeze(2)  # [B, R, 1, D]
+
     def _layer_decode_with_cache(
         self,
         layer,
@@ -496,6 +691,95 @@ class ARTabPFNPredictor:
 
         # Attention
         attn_out = flex_attention(q, k_full, v_full, block_mask=row_mask)
+        attn_out = attn_out.transpose(1, 2).reshape(B, N, D)
+        attn_out = layer.attn_rows.out_proj(attn_out)
+
+        x_row = layer.norm2(x_row + attn_out)
+
+        # FFN
+        x_out = layer.norm3(x_row + layer.ff(x_row))
+
+        return x_out.unsqueeze(2)  # [B, N, 1, D]
+
+    def _layer_decode_with_cache_triton(
+        self,
+        layer,
+        x: Tensor,
+        feature_mask: BlockMask,
+    ) -> Tensor:
+        """
+        Decode through one layer using shared-context attention (Triton backend).
+
+        Args:
+            layer: TwoStageTransformerLayer
+            x: [B, N, C, D] new tokens (C=1), N must be 1 or 2
+            feature_mask: Mask for feature attention
+
+        Returns:
+            [B, N, C, D] output
+        """
+        B, N, C, D = x.shape
+
+        if N not in (1, 2):
+            raise ValueError(
+                "Triton decode only supports N=1 (target) or N=2 (buffer, target)."
+            )
+
+        # Feature attention
+        x_feat = x.reshape(B * N, C, D)
+        attn_out, _ = layer.attn_features(x_feat, x_feat, x_feat, feature_mask)
+        x = layer.norm1((attn_out + x_feat).reshape(B, N, C, D))
+
+        # Row attention with shared context + buffer
+        x_row = x.squeeze(2)  # [B, N, D]
+
+        H = layer.attn_rows.n_heads
+        Dh = layer.attn_rows.head_dim
+
+        q = layer.attn_rows.q_proj(x_row).view(B, N, H, Dh).transpose(1, 2)
+        k_new = layer.attn_rows.k_proj(x_row).view(B, N, H, Dh).transpose(1, 2)
+        v_new = layer.attn_rows.v_proj(x_row).view(B, N, H, Dh).transpose(1, 2)
+
+        k_ctx = layer.k_ctx_cache[:, : self.context_len, :]
+        v_ctx = layer.v_ctx_cache[:, : self.context_len, :]
+        k_buf = layer.k_buf_cache[:, :, : self.buffer_len, :]
+        v_buf = layer.v_buf_cache[:, :, : self.buffer_len, :]
+
+        if N == 1:
+            q_tgt = q[:, :, 0:1, :]
+            out_tgt = hybrid_attention(
+                q_tgt, k_ctx, v_ctx, k_buf, v_buf, use_triton=True
+            )
+            attn_out = out_tgt
+        else:
+            q_buf = q[:, :, 0:1, :]
+            q_tgt = q[:, :, 1:2, :]
+            k_new_buf = k_new[:, :, 0:1, :]
+            v_new_buf = v_new[:, :, 0:1, :]
+
+            if self.buffer_len == 0:
+                k_buf_all = k_new_buf
+                v_buf_all = v_new_buf
+            else:
+                k_buf_all = torch.cat([k_buf, k_new_buf], dim=2)
+                v_buf_all = torch.cat([v_buf, v_new_buf], dim=2)
+
+            out_buf = hybrid_attention(
+                q_buf, k_ctx, v_ctx, k_buf_all, v_buf_all, use_triton=True
+            )
+            out_tgt = hybrid_attention(
+                q_tgt, k_ctx, v_ctx, k_buf_all, v_buf_all, use_triton=True
+            )
+
+            layer.k_buf_cache[
+                :, :, self.buffer_len : self.buffer_len + 1, :
+            ] = k_new_buf
+            layer.v_buf_cache[
+                :, :, self.buffer_len : self.buffer_len + 1, :
+            ] = v_new_buf
+
+            attn_out = torch.cat([out_buf, out_tgt], dim=2)
+
         attn_out = attn_out.transpose(1, 2).reshape(B, N, D)
         attn_out = layer.attn_rows.out_proj(attn_out)
 
