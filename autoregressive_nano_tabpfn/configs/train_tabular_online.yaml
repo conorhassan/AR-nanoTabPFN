@@ -34,7 +34,7 @@ scheduler:
 training:
   max_steps: 20000
   grad_clip: 1.0
-  compile_model: true
+  compile_model: false
   use_amp: true
   amp_dtype: bfloat16
   val_interval: 250
