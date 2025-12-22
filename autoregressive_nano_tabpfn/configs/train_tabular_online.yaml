@@ -1,7 +1,7 @@
 device: cpu
 
 data:
-  batch_size: 512
+  batch_size: 64
   num_batches_per_epoch: 2000
   num_workers: 0
   d_list: [2, 3]
