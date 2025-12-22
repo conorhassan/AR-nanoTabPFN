@@ -29,6 +29,7 @@ class TabularSampler:
         noise_std: float = 0.01,
         sampling: str = "mixed",
         # Normalization
+        normalize_x: bool = True,
         normalize_y: bool = True,
         # Device/dtype
         device: str = "cpu",
@@ -46,7 +47,8 @@ class TabularSampler:
             hidden_dim: MLP hidden dimension
             noise_std: Gaussian noise std
             sampling: Initial cause sampling ("normal", "uniform", "mixed")
-            normalize_y: Whether to z-normalize targets
+            normalize_x: Whether to z-normalize features using context stats
+            normalize_y: Whether to z-normalize targets using context stats
             device: Device for generation
             dtype: Data type
         """
@@ -54,6 +56,7 @@ class TabularSampler:
         self.dim_y = dim_y
         self.device = device
         self.dtype = dtype
+        self.normalize_x = normalize_x
         self.normalize_y = normalize_y
 
         # MLP-SCM parameters
@@ -174,6 +177,14 @@ class TabularSampler:
             xc, yc = X[:nc], y[:nc]
             xb, yb = X[nc : nc + nb], y[nc : nc + nb]
             xt, yt = X[nc + nb :], y[nc + nb :]
+
+            # Normalize x using context statistics (per-feature)
+            if self.normalize_x:
+                x_mean = xc.mean(dim=0, keepdim=True)
+                x_std = xc.std(dim=0, keepdim=True).clamp(min=1e-6)
+                xc = (xc - x_mean) / x_std
+                xb = (xb - x_mean) / x_std
+                xt = (xt - x_mean) / x_std
 
             # Normalize y using context statistics
             if self.normalize_y:

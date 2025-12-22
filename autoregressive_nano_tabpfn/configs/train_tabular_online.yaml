@@ -8,6 +8,7 @@ data:
   nc_list: [16, 32, 64, 128]
   num_buffer: 32
   num_target: 512
+  normalize_x: true
   normalize_y: true
   dtype: float32
   seed: 123

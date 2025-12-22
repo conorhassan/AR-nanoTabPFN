@@ -48,6 +48,7 @@ class DataConfig:
     nc_list: List[int] = field(default_factory=lambda: [8, 16, 32, 64, 128, 256, 512, 1024])
     num_buffer: int = 32
     num_target: int = 512
+    normalize_x: bool = True
     normalize_y: bool = True
     dtype: str = "float32"
     seed: int = 123
@@ -362,6 +363,7 @@ def main(config: Optional[Config] = None):
         nc_list=config.data.nc_list,
         num_buffer=config.data.num_buffer,
         num_target=config.data.num_target,
+        normalize_x=config.data.normalize_x,
         normalize_y=config.data.normalize_y,
         dtype=getattr(torch, config.data.dtype),
         device="cpu",

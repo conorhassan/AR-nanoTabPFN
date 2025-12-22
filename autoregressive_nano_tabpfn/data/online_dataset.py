@@ -23,6 +23,7 @@ class OnlineTabularDataset(IterableDataset):
         nc_list: List of context sizes to sample from
         num_buffer: Fixed buffer size
         num_target: Fixed target size
+        normalize_x: Z-normalize features using context stats (per-feature)
         normalize_y: Z-normalize targets using context stats
         dtype: Torch dtype
         device: Device for generation
@@ -38,6 +39,7 @@ class OnlineTabularDataset(IterableDataset):
         nc_list: List[int],
         num_buffer: int,
         num_target: int,
+        normalize_x: bool = True,
         normalize_y: bool = True,
         dtype: torch.dtype = torch.float32,
         device: str = "cpu",
@@ -50,6 +52,7 @@ class OnlineTabularDataset(IterableDataset):
         self.nc_list = list(nc_list)
         self.nb = num_buffer
         self.nt = num_target
+        self.normalize_x = normalize_x
         self.normalize_y = normalize_y
         self.dtype = dtype
         self.device = device
@@ -67,6 +70,7 @@ class OnlineTabularDataset(IterableDataset):
             hidden_dim=64,
             noise_std=0.01,
             sampling="mixed",
+            normalize_x=self.normalize_x,
             normalize_y=self.normalize_y,
             device=self.device,
             dtype=self.dtype,
