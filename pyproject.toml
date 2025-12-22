@@ -5,7 +5,7 @@ description = "Efficient TabPFN with flex_attention training and Triton inferenc
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "torch>=2.5.0",
+    "torch==2.9.0",
     "numpy>=1.24.0",
     "matplotlib>=3.7.0",
     "h5py>=3.8.0",
@@ -30,6 +30,7 @@ build-backend = "hatchling.build"
 packages = ["autoregressive_nano_tabpfn"]
 
 [tool.uv]
+index-url = "https://download.pytorch.org/whl/cu126"
 dev-dependencies = [
     "seaborn>=0.12.0",
     "pytest>=7.0.0",
