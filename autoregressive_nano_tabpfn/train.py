@@ -182,6 +182,39 @@ def precompile_masks(
     return mask_cache
 
 
+class CudaPrefetcher:
+    def __init__(self, loader, device):
+        self.loader = loader
+        self.device = device
+        self.stream = torch.cuda.Stream() if device == "cuda" else None
+        self.iter = iter(loader)
+        self.next_batch = None
+        self._preload()
+
+    def _preload(self):
+        try:
+            batch = next(self.iter)
+        except StopIteration:
+            self.iter = iter(self.loader)
+            batch = next(self.iter)
+
+        if self.stream is not None:
+            with torch.cuda.stream(self.stream):
+                self.next_batch = batch.to(self.device, non_blocking=True)
+        else:
+            self.next_batch = batch.to(self.device)
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        if self.stream is not None:
+            torch.cuda.current_stream().wait_stream(self.stream)
+        batch = self.next_batch
+        self._preload()
+        return batch
+
+
 def train(model: ARTabPFN, dataset: OnlineTabularDataset, config: Config) -> ARTabPFN:
     """Train ARTabPFN with online data generation."""
     device = config.device
@@ -198,7 +231,8 @@ def train(model: ARTabPFN, dataset: OnlineTabularDataset, config: Config) -> ART
         )
 
     if config.training.compile_model and device == "cuda":
-        model = torch.compile(model, mode="default")
+        model.embedder = torch.compile(model.embedder, mode="default")
+        model.head = torch.compile(model.head, mode="default")
 
     optimizer = AdamW(
         model.parameters(),
@@ -218,8 +252,8 @@ def train(model: ARTabPFN, dataset: OnlineTabularDataset, config: Config) -> ART
 
     model.train()
 
-    loader = DataLoader(dataset, batch_size=None, shuffle=False)
-    data_iter = iter(loader)
+    loader = DataLoader(dataset, batch_size=None, shuffle=False, pin_memory=(device == "cuda"))
+    prefetcher = CudaPrefetcher(loader, device)
 
     # Precompile masks if configured
     if config.training.precompile_masks and config.training.precompile_shapes:
@@ -235,13 +269,7 @@ def train(model: ARTabPFN, dataset: OnlineTabularDataset, config: Config) -> ART
     t0 = time.perf_counter()
 
     for step in range(config.training.max_steps):
-        try:
-            batch = next(data_iter)
-        except StopIteration:
-            data_iter = iter(loader)
-            batch = next(data_iter)
-
-        batch = batch.to(device)
+        batch = next(prefetcher)
 
         Nc, Nb, Nt = batch.xc.size(1), batch.xb.size(1), batch.xt.size(1)
         cache_key = (Nc, Nb, Nt)
