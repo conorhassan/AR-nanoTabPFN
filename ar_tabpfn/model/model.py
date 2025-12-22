@@ -339,8 +339,7 @@ class ARTabPFN(nn.Module):
             mask_rows: Pre-computed row attention mask
 
         Returns:
-            loss: Training loss (if y_target provided)
-            mean: Predicted means [B, Nt, K, 1]
+            loss: Training loss (requires y_target)
         """
 
         # Embed context/buffer/targets

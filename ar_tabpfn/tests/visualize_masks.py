@@ -2,7 +2,7 @@
 Visualization utilities for attention masks.
 
 Run this script to generate mask visualizations:
-    python -m autoregressive_nano_tabpfn.tests.visualize_masks
+    python -m ar_tabpfn.tests.visualize_masks
 
 Outputs PNG files showing the attention patterns for:
 - Feature attention (dense)

@@ -2,8 +2,8 @@
 
 import torch
 
-from autoregressive_nano_tabpfn.data import DataAttr, TabularSampler
-from autoregressive_nano_tabpfn.model import (
+from ar_tabpfn.data import DataAttr, TabularSampler
+from ar_tabpfn.model import (
     ARTabPFN,
     create_dense_mask,
     create_row_mask,

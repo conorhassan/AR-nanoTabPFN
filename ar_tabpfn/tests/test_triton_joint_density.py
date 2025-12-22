@@ -51,14 +51,14 @@ print(f"  PyTorch version: {torch.__version__}")
 
 # Import Triton kernel functions
 try:
-    from autoregressive_nano_tabpfn.model.triton_kernels import (
+    from ar_tabpfn.model.triton_kernels import (
         triton_available,
         triton_context_attention,
         pytorch_context_attention,
         pytorch_teacher_forcing_buffer_attention,
         hybrid_teacher_forcing_attention,
     )
-    from autoregressive_nano_tabpfn.model import ARTabPFN, ARTabPFNPredictor, clear_mask_cache
+    from ar_tabpfn.model import ARTabPFN, ARTabPFNPredictor, clear_mask_cache
 except ImportError as e:
     print(f"Import error: {e}")
     print("   Make sure you're running from the nanoTabPFN directory")
@@ -191,7 +191,9 @@ def test_predictor_joint_density_equivalence(B=4, Nc=64, Nt=8, F=4, dtype=torch.
     predictor_flex = ARTabPFNPredictor.from_trained_model(
         model, backend="flex_attention"
     )
-    predictor_triton = ARTabPFNPredictor.from_trained_model(model, backend="triton")
+    predictor_triton = ARTabPFNPredictor.from_trained_model(
+        model, backend="triton_shared_context"
+    )
 
     with torch.no_grad():
         log_density_flex = predictor_flex.evaluate_joint_density(
@@ -318,7 +320,9 @@ def main():
         y_target = torch.randn(B, Nt, device="cuda", dtype=perf_dtype)
 
         predictor_flex = ARTabPFNPredictor.from_trained_model(model, backend="flex_attention")
-        predictor_triton = ARTabPFNPredictor.from_trained_model(model, backend="triton")
+        predictor_triton = ARTabPFNPredictor.from_trained_model(
+            model, backend="triton_shared_context"
+        )
 
         # Warmup
         with torch.no_grad():

@@ -38,6 +38,11 @@ Key settings to get `flex_attention` working with `torch.compile`:
 
 Compiling the whole model (`torch.compile(model)`) works but has long warmup time (~10+ min) due to tracing all shape combinations.
 
+## Future Optimizations
+
+- Avoid per-step `torch.cat` allocations in shared-context decode by preallocating a
+  working buffer for K/V and slicing views instead of concatenating.
+
 ## Citation
 
 ```bibtex

@@ -3,7 +3,7 @@
 import pytest
 import torch
 
-from autoregressive_nano_tabpfn.model.triton_kernels import (
+from ar_tabpfn.model.triton_kernels import (
     triton_available,
     triton_context_attention,
     pytorch_context_attention,

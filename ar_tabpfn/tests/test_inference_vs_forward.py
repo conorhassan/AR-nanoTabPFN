@@ -5,8 +5,8 @@ Tests verifying inference methods match forward pass behavior.
 import torch
 from torch.nn.attention.flex_attention import create_block_mask
 
-from autoregressive_nano_tabpfn.model import ARTabPFN, ARTabPFNPredictor
-from autoregressive_nano_tabpfn.model.attention import create_dense_mask
+from ar_tabpfn.model import ARTabPFN, ARTabPFNPredictor
+from ar_tabpfn.model.attention import create_dense_mask
 
 
 def create_inference_style_row_mask(
@@ -77,16 +77,9 @@ def test_context_prefill_matches_forward():
     ctx_emb = ctx_emb.unsqueeze(2)  # [B, Nc, 1, D]
 
     feature_mask = create_dense_mask(seq_len=1, device="cpu")
-    row_mask = create_block_mask(
-        lambda b, h, q, k: q >= k,  # causal
-        B=None,
-        H=None,
-        Q_LEN=Nc,
-        KV_LEN=Nc,
-        device="cpu",
-    )
+    row_mask = create_dense_mask(seq_len=Nc, device="cpu")
 
-    z_forward, _ = model.backbone(ctx_emb, feature_mask, row_mask)
+    z_forward, kv_cache = model.backbone(ctx_emb, feature_mask, row_mask)
 
     # Inference prefill
     predictor.init_kv_cache(B, Nc, device="cpu", dtype=torch.float32)
@@ -97,10 +90,11 @@ def test_context_prefill_matches_forward():
         k_cached = layer.k_cache[:, :, :Nc, :]
         v_cached = layer.v_cache[:, :, :Nc, :]
 
-        # Get forward K,V by running through layer
-        # This requires extracting from the layer, but the cache should match
+        k_forward, v_forward = kv_cache[i]
         assert k_cached.shape == (B, 2, Nc, 16), f"Layer {i}: K shape mismatch"
         assert v_cached.shape == (B, 2, Nc, 16), f"Layer {i}: V shape mismatch"
+        torch.testing.assert_close(k_cached, k_forward, rtol=1e-5, atol=1e-5)
+        torch.testing.assert_close(v_cached, v_forward, rtol=1e-5, atol=1e-5)
 
     print("test_context_prefill_matches_forward PASSED")
 

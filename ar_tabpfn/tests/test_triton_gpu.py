@@ -47,7 +47,7 @@ print(f"  PyTorch version: {torch.__version__}")
 
 # Import Triton kernel functions
 try:
-    from autoregressive_nano_tabpfn.model.triton_kernels import (
+    from ar_tabpfn.model.triton_kernels import (
         triton_available,
         triton_context_attention,
         pytorch_context_attention,
@@ -55,7 +55,7 @@ try:
         merge_attention_outputs,
         hybrid_attention,
     )
-    from autoregressive_nano_tabpfn.model import ARTabPFN, ARTabPFNPredictor
+    from ar_tabpfn.model import ARTabPFN, ARTabPFNPredictor
 except ImportError as e:
     print(f"❌ Import error: {e}")
     print("   Make sure you're running from the nanoTabPFN directory")
@@ -225,7 +225,9 @@ def test_predictor_backend_equivalence(
     predictor_flex = ARTabPFNPredictor.from_trained_model(
         model, backend="flex_attention"
     )
-    predictor_triton = ARTabPFNPredictor.from_trained_model(model, backend="triton")
+    predictor_triton = ARTabPFNPredictor.from_trained_model(
+        model, backend="triton_shared_context"
+    )
 
     z_flex = run_fixed_buffer_decode(
         predictor_flex, x_context, y_context, x_target, fixed_prev_y
@@ -431,7 +433,7 @@ def main():
             model, backend="flex_attention"
         )
         predictor_triton = ARTabPFNPredictor.from_trained_model(
-            model, backend="triton"
+            model, backend="triton_shared_context"
         )
 
         # Warmup (compile + cache allocation)

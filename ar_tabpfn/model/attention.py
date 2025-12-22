@@ -10,6 +10,7 @@ Sequence structure for row attention:
 """
 
 from typing import Tuple
+import warnings
 import torch
 from torch import Tensor, nn
 from torch.nn.attention.flex_attention import (
@@ -20,8 +21,11 @@ from torch.nn.attention.flex_attention import (
 )
 
 if torch.cuda.is_available():
-    flex_attention = torch.compile(flex_attention, fullgraph=True)
-    create_block_mask = torch.compile(create_block_mask)
+    try:
+        flex_attention = torch.compile(flex_attention, fullgraph=True)
+        create_block_mask = torch.compile(create_block_mask)
+    except Exception as exc:
+        warnings.warn(f"Failed to compile flex_attention: {exc}", RuntimeWarning)
 
 
 class MultiheadAttention(nn.Module):
@@ -61,9 +65,13 @@ class MultiheadAttention(nn.Module):
 _mask_cache = {}
 
 
-def create_dense_mask(seq_len: int, device: str = "cuda") -> BlockMask:
+def _device_key(device: str | torch.device) -> str:
+    return str(device) if isinstance(device, torch.device) else device
+
+
+def create_dense_mask(seq_len: int, device: str | torch.device = "cuda") -> BlockMask:
     """Dense self-attention mask for feature dimension (all attend to all)."""
-    key = ("dense", seq_len, device)
+    key = ("dense", seq_len, _device_key(device))
     if key not in _mask_cache:
 
         def mask_mod(b, h, q_idx, kv_idx):
@@ -80,7 +88,7 @@ def create_row_mask(
     context_len: int,
     buffer_len: int,
     attending_chunks: int | None = None,
-    device: str = "cuda",
+    device: str | torch.device = "cuda",
 ) -> BlockMask:
     """
     Row attention mask with Context/Buffer/Target sections.
@@ -102,7 +110,14 @@ def create_row_mask(
     if attending_chunks is None:
         attending_chunks = target_len // (2 * buffer_len)
 
-    key = ("row", num_rows, context_len, buffer_len, attending_chunks, device)
+    key = (
+        "row",
+        num_rows,
+        context_len,
+        buffer_len,
+        attending_chunks,
+        _device_key(device),
+    )
     if key not in _mask_cache:
         target_start = context_len + buffer_len
 
@@ -161,10 +176,10 @@ def create_row_mask(
 
 
 def create_context_self_attention_mask(
-    context_len: int, device: str = "cuda"
+    context_len: int, device: str | torch.device = "cuda"
 ) -> BlockMask:
     """Dense self-attention mask for context encoding (used in inference)."""
-    key = ("context_self", context_len, device)
+    key = ("context_self", context_len, _device_key(device))
     if key not in _mask_cache:
 
         def mask_mod(b, h, q_idx, kv_idx):

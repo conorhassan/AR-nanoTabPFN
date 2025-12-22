@@ -1,7 +1,7 @@
 """
 Autoregressive predictor for ARTabPFN with KV caching.
 
-Uses flex_attention by default with an optional Triton backend for shared-context decode.
+Uses flex_attention by default with an optional Triton shared-context backend for decode.
 """
 
 from typing import Optional
@@ -32,34 +32,37 @@ if torch.cuda.is_available():
 class ARTabPFNPredictor:
     """Methods for joint sampling and log-density evaluation."""
 
-    def __init__(self, embedder, backbone, head, ar_tokens, backend: str = "flex_attention"):
+    def __init__(
+        self, embedder, backbone, head, ar_tokens, backend: str = "flex_attention"
+    ):
         """
         Args:
             embedder: Embedder module (embed_context, embed_buffer, embed_target)
             backbone: TwoStageTransformer module
             head: MixtureGaussianHead module
             ar_tokens: [buffer_size, d_model] AR position embeddings
-            backend: "flex_attention" (default) or "triton"
+            backend: "flex_attention" (default) or "triton_shared_context"
         """
         self.embedder = embedder
         self.backbone = backbone
         self.head = head
         self.ar_tokens = ar_tokens
 
-        if backend not in ("flex_attention", "triton"):
+        if backend not in ("flex_attention", "triton_shared_context"):
             raise ValueError(f"Unsupported backend: {backend}")
-        if backend == "triton" and not triton_available():
+        if backend == "triton_shared_context" and not triton_available():
             warnings.warn(
-                "Triton not available; hybrid attention will use PyTorch context attention.",
+                "Triton shared-context backend not available; "
+                "hybrid attention will use PyTorch context attention.",
                 RuntimeWarning,
             )
         self.backend = backend
 
         # Cache state (set and updated during inference)
         self.seq_len = 0  # Current committed sequence length (flex path)
-        self.context_len = 0  # Context length (triton path)
-        self.buffer_len = 0  # Buffer length (triton path)
-        self.max_buffer_len = 0  # Allocated buffer capacity (triton path)
+        self.context_len = 0  # Context length (shared-context path)
+        self.buffer_len = 0  # Buffer length (shared-context path)
+        self.max_buffer_len = 0  # Allocated buffer capacity (shared-context path)
         self._device = None
         self._dtype = None
 
@@ -89,7 +92,7 @@ class ARTabPFNPredictor:
         Args:
             batch_size: Batch size B
             max_seq_len: Maximum sequence length (context + all buffers) for flex,
-                or maximum buffer length for triton.
+                or maximum buffer length for triton_shared_context.
             device: Device for cache tensors
             dtype: Data type for cache tensors
         """
@@ -101,7 +104,7 @@ class ARTabPFNPredictor:
         self._device = device
         self._dtype = dtype
 
-        if self.backend == "triton":
+        if self.backend == "triton_shared_context":
             max_buf_len = max_seq_len
             self.max_buffer_len = max_buf_len
             for layer in self.backbone.layers:
@@ -150,8 +153,8 @@ class ARTabPFNPredictor:
             x_context: [B, Nc, num_features] context features
             y_context: [B, Nc] context targets
         """
-        if self.backend == "triton":
-            self.prefill_context_triton(x_context, y_context)
+        if self.backend == "triton_shared_context":
+            self.prefill_context_shared(x_context, y_context)
             return
 
         # Embed context
@@ -175,9 +178,9 @@ class ARTabPFNPredictor:
         self.seq_len = Nc
 
     @torch.no_grad()
-    def prefill_context_triton(self, x_context: Tensor, y_context: Tensor) -> None:
+    def prefill_context_shared(self, x_context: Tensor, y_context: Tensor) -> None:
         """
-        Encode context and populate shared KV cache for Triton backend.
+        Encode context and populate shared KV cache for Triton shared-context backend.
 
         Key optimization: Since context is shared across the batch, we only
         process B=1 during prefill, giving B times compute and memory savings.
@@ -209,7 +212,7 @@ class ARTabPFNPredictor:
                     H, Nc, Dh, device=x.device, dtype=x.dtype
                 )
                 layer.v_ctx_cache = torch.zeros_like(layer.k_ctx_cache)
-            x = self._layer_forward_with_cache_triton(
+            x = self._layer_forward_with_cache_shared(
                 layer, x, feature_mask, row_mask, cache_start=0
             )
 
@@ -240,14 +243,14 @@ class ARTabPFNPredictor:
 
         # Feature mask (trivial C=1)
         feature_mask = create_dense_mask(seq_len=1, device=x.device)
-        if self.backend == "triton":
+        if self.backend == "triton_shared_context":
             if self.buffer_len + commit > self.max_buffer_len:
                 raise ValueError(
-                    "Triton buffer cache exceeded; increase max buffer length."
+                    "Shared-context buffer cache exceeded; increase max buffer length."
                 )
             # Run through transformer layers using shared-context attention
             for layer in self.backbone.layers:
-                x = self._layer_decode_with_cache_triton(layer, x, feature_mask)
+                x = self._layer_decode_with_cache_shared(layer, x, feature_mask)
 
             # Commit only buffer positions (targets are never committed)
             self.buffer_len += commit
@@ -339,7 +342,7 @@ class ARTabPFNPredictor:
         device, dtype = x_context.device, x_context.dtype
 
         # Setup cache
-        if self.backend == "triton":
+        if self.backend == "triton_shared_context":
             max_buf = Nt  # Buffer only; context is cached separately
             self.init_kv_cache(B, max_buf, device, dtype)
         else:
@@ -376,8 +379,8 @@ class ARTabPFNPredictor:
         Returns:
             log_density: [B, Nt] log-density of each y_target under the model
         """
-        if self.backend == "triton":
-            return self._evaluate_joint_density_triton(
+        if self.backend == "triton_shared_context":
+            return self._evaluate_joint_density_shared(
                 x_context, y_context, x_target, y_target
             )
 
@@ -386,7 +389,7 @@ class ARTabPFNPredictor:
         )
 
     @torch.no_grad()
-    def _evaluate_joint_density_triton(
+    def _evaluate_joint_density_shared(
         self,
         x_context: Tensor,
         y_context: Tensor,
@@ -411,7 +414,7 @@ class ARTabPFNPredictor:
         # [Buffer_0..Nt-1, Target_0..Nt-1]
         embedding = torch.cat([buffer_emb, target_emb], dim=1)
 
-        z = self._teacher_forcing_decode_triton(embedding, Nt)
+        z = self._teacher_forcing_decode_shared(embedding, Nt)
 
         z_targets = z[:, Nt:, :]
         return self.head.log_likelihood(z_targets, y_target.unsqueeze(-1))
@@ -468,7 +471,7 @@ class ARTabPFNPredictor:
         return self.backbone.norm(x.squeeze(2))
 
     @torch.no_grad()
-    def _teacher_forcing_decode_triton(
+    def _teacher_forcing_decode_shared(
         self, embedding: Tensor, num_targets: int
     ) -> Tensor:
         """Process [buffers, targets] with Triton context attention + buffer SDPA."""
@@ -478,7 +481,7 @@ class ARTabPFNPredictor:
         feature_mask = create_dense_mask(seq_len=1, device=x.device)
 
         for layer in self.backbone.layers:
-            x = self._layer_teacher_forcing_triton(
+            x = self._layer_teacher_forcing_shared(
                 layer, x, feature_mask, num_targets
             )
 
@@ -627,7 +630,7 @@ class ARTabPFNPredictor:
 
         return x_out.unsqueeze(2)  # [B, R, 1, D]
 
-    def _layer_forward_with_cache_triton(
+    def _layer_forward_with_cache_shared(
         self,
         layer,
         x: Tensor,
@@ -740,14 +743,14 @@ class ARTabPFNPredictor:
 
         return x_out.unsqueeze(2)  # [B, N, 1, D]
 
-    def _layer_decode_with_cache_triton(
+    def _layer_decode_with_cache_shared(
         self,
         layer,
         x: Tensor,
         feature_mask: BlockMask,
     ) -> Tensor:
         """
-        Decode through one layer using shared-context attention (Triton backend).
+        Decode through one layer using shared-context attention (Triton shared-context backend).
 
         Args:
             layer: TwoStageTransformerLayer
@@ -761,7 +764,7 @@ class ARTabPFNPredictor:
 
         if N not in (1, 2):
             raise ValueError(
-                "Triton decode only supports N=1 (target) or N=2 (buffer, target)."
+                "Shared-context decode only supports N=1 (target) or N=2 (buffer, target)."
             )
 
         # Feature attention
@@ -829,7 +832,7 @@ class ARTabPFNPredictor:
 
         return x_out.unsqueeze(2)  # [B, N, 1, D]
 
-    def _layer_teacher_forcing_triton(
+    def _layer_teacher_forcing_shared(
         self,
         layer,
         x: Tensor,
