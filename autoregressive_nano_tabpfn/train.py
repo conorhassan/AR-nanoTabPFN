@@ -6,6 +6,9 @@ os.environ["TORCHINDUCTOR_CPP_WRAPPER"] = "0"
 
 import torch._inductor.config
 torch._inductor.config.triton.cudagraphs = False
+torch._inductor.config.triton.unique_kernel_names = True
+torch._inductor.config.coordinate_descent_tuning = True
+torch._inductor.config.triton.persistent_reductions = True
 if hasattr(torch._inductor.config.triton, "cudagraph_trees"):
     torch._inductor.config.triton.cudagraph_trees = False
 if hasattr(torch._inductor.config, "use_static_cuda_launcher"):
