@@ -4,7 +4,7 @@ import argparse
 import math
 import os
 import time
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -16,6 +16,12 @@ from torch.utils.data import DataLoader
 
 from .model import ARTabPFN, create_dense_mask, create_row_mask
 from .data import OnlineTabularDataset
+
+try:
+    import wandb
+    WANDB_AVAILABLE = True
+except ImportError:
+    WANDB_AVAILABLE = False
 
 
 @dataclass
@@ -50,8 +56,9 @@ class TrainingConfig:
     compile_model: bool = True
     use_amp: bool = True
     amp_dtype: str = "bfloat16"
-    log_interval: int = 50
     val_interval: int = 250
+    precompile_masks: bool = True
+    precompile_shapes: Optional[List[List[int]]] = None  # [[Nc, Nb, Nt], ...]
 
 
 @dataclass
@@ -79,6 +86,8 @@ class LoggingConfig:
     use_wandb: bool = False
     project: str = "artabpfn"
     run_name: Optional[str] = None
+    tags: List[str] = field(default_factory=list)
+    log_interval: int = 50
 
 
 @dataclass
@@ -125,10 +134,52 @@ def get_cosine_schedule_with_warmup(
     return LambdaLR(optimizer, lr_lambda)
 
 
+def precompile_masks(
+    shapes: List[Tuple[int, int, int]], device: str
+) -> Dict[Tuple[int, int, int], Tuple]:
+    """Precompile masks for given (Nc, Nb, Nt) shapes.
+
+    Args:
+        shapes: List of (context_len, buffer_len, target_len) tuples
+        device: Device to create masks on
+
+    Returns:
+        Dictionary mapping (Nc, Nb, Nt) -> (mask_features, mask_rows)
+    """
+    mask_cache = {}
+    print(f"Precompiling {len(shapes)} mask shapes...")
+
+    for nc, nb, nt in shapes:
+        key = (nc, nb, nt)
+        num_rows = nc + nb + nt
+
+        mask_features = create_dense_mask(seq_len=1, device=device)
+        mask_rows = create_row_mask(
+            num_rows=num_rows,
+            context_len=nc,
+            buffer_len=nb,
+            device=device,
+        )
+        mask_cache[key] = (mask_features, mask_rows)
+        print(f"  Precompiled: Nc={nc}, Nb={nb}, Nt={nt}")
+
+    return mask_cache
+
+
 def train(model: ARTabPFN, dataset: OnlineTabularDataset, config: Config) -> ARTabPFN:
     """Train ARTabPFN with online data generation."""
     device = config.device
     model = model.to(device)
+
+    # Initialize wandb if enabled
+    use_wandb = config.logging.use_wandb and WANDB_AVAILABLE
+    if use_wandb:
+        wandb.init(
+            project=config.logging.project,
+            name=config.logging.run_name,
+            config=asdict(config),
+            tags=config.logging.tags,
+        )
 
     if config.training.compile_model and device == "cuda":
         model = torch.compile(model, mode="reduce-overhead")
@@ -154,7 +205,12 @@ def train(model: ARTabPFN, dataset: OnlineTabularDataset, config: Config) -> ART
     loader = DataLoader(dataset, batch_size=None, shuffle=False)
     data_iter = iter(loader)
 
-    mask_cache: Dict[tuple, tuple] = {}
+    # Precompile masks if configured
+    if config.training.precompile_masks and config.training.precompile_shapes:
+        shapes = [tuple(s) for s in config.training.precompile_shapes]
+        mask_cache = precompile_masks(shapes, device)
+    else:
+        mask_cache: Dict[tuple, tuple] = {}
 
     if config.checkpoint.save_dir:
         os.makedirs(config.checkpoint.save_dir, exist_ok=True)
@@ -210,14 +266,25 @@ def train(model: ARTabPFN, dataset: OnlineTabularDataset, config: Config) -> ART
 
         total_loss += loss.item()
 
-        if (step + 1) % config.training.log_interval == 0:
+        if (step + 1) % config.logging.log_interval == 0:
             elapsed = time.perf_counter() - t0
-            avg_loss = total_loss / config.training.log_interval
-            steps_per_sec = config.training.log_interval / elapsed
+            avg_loss = total_loss / config.logging.log_interval
+            steps_per_sec = config.logging.log_interval / elapsed
             lr = optimizer.param_groups[0]["lr"]
             print(
                 f"step {step+1:5d} | loss {avg_loss:.4f} | lr {lr:.2e} | {steps_per_sec:.1f} it/s"
             )
+
+            if use_wandb:
+                wandb.log(
+                    {
+                        "train/loss": avg_loss,
+                        "train/learning_rate": lr,
+                        "train/steps_per_sec": steps_per_sec,
+                    },
+                    step=step + 1,
+                )
+
             total_loss = 0.0
             t0 = time.perf_counter()
 
@@ -229,6 +296,12 @@ def train(model: ARTabPFN, dataset: OnlineTabularDataset, config: Config) -> ART
             ckpt_path = Path(config.checkpoint.save_dir) / f"step_{step+1}.pt"
             torch.save({"step": step + 1, "model": model.state_dict()}, ckpt_path)
             print(f"Saved checkpoint: {ckpt_path}")
+
+    # Finalize wandb
+    if use_wandb:
+        wandb.summary["total_steps"] = config.training.max_steps
+        wandb.summary["final_loss"] = avg_loss
+        wandb.finish()
 
     return model
 
